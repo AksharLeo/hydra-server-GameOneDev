@@ -14,6 +14,7 @@ and download sources browsing all work exactly as before.
 | --- | --- |
 | Account, login, friends, profiles, catalogue | Official Hydra servers (unchanged) |
 | Cloud save backups (Ludusavi tar bundles) | **this server** |
+| Cloud Save V2 — per-file snapshot sync (launcher 4.1.0+) | **this server** |
 | Emulation memory-card saves (PS1/PS2) | **this server** |
 | Achievement sync across devices | **this server** |
 | Download source list sync across devices | **this server** |
@@ -110,6 +111,54 @@ Implements the endpoints the launcher routes to a self-hosted cloud server:
 - `PUT|GET /storage/{token}` — S3-style presigned upload/download URLs
   (signed, short-lived, streamed to/from disk)
 - `GET /health`
+- `GET /capabilities` — version and feature list (see below)
+
+### Cloud Save V2
+
+Launcher 4.1.0 replaced the tarball-per-backup flow with per-file snapshots for
+Steam games. A save is a manifest of files, each content-addressed by SHA-256:
+
+- `POST /profile/cloud-saves/prepare-snapshot` — registers the manifest and
+  returns a presigned PUT for each blob the server doesn't already hold
+  (everything else comes back as `skip`, so only changed files upload)
+- `POST /profile/cloud-saves/commit-snapshot` — verifies the bytes landed and
+  promotes the snapshot to the game's current save
+- `GET|DELETE /profile/cloud-saves/snapshots?shop=&objectId=`
+- `GET /profile/cloud-saves/snapshot-restore-manifest?snapshotId=`
+- `GET /profile/cloud-saves/snapshot-download-urls?snapshotId=`
+
+Notable behaviour:
+
+- **Conflict detection.** Every commit bumps the snapshot `version`. The
+  launcher sends the version it started from as `baseVersion`; if another
+  machine has committed since, the upload is refused with `409` instead of
+  overwriting the newer save.
+- **Deduplication.** Blobs are stored once per user per hash, so a file shared
+  across variants or games costs one copy — and re-syncing an unchanged save
+  transfers nothing.
+- **Integrity.** Blob uploads are hashed as they stream and rejected if they
+  don't match the hash the URL was signed for, so a content-addressed object
+  can never hold the wrong bytes.
+- **Garbage collection.** Blobs are deleted once no manifest references them;
+  abandoned uploads are swept after 24 hours.
+
+The legacy artifact endpoints stay in place — the launcher still uses them for
+non-Steam games and for older clients.
+
+### Capabilities
+
+`GET /capabilities` (unauthenticated) reports what this build supports:
+
+```json
+{ "name": "hydra-server", "version": "4.1.0", "features": ["cloud-saves-v2", "..."] }
+```
+
+The launcher checks this before enabling a feature whose endpoints might not
+exist here yet — upstream keeps adding subscription-gated features that get
+routed to whichever cloud server is configured, and without this the only
+symptom would be a 404 in the middle of a sync. `features` is the contract to
+match on; `version` tracks the launcher release this server targets and is for
+display and support.
 
 ## Notes
 

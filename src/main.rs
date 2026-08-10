@@ -3,6 +3,7 @@ mod admin;
 mod artifacts;
 mod artwork;
 mod auth;
+mod cloud_saves;
 mod config;
 mod emulation;
 mod error;
@@ -150,6 +151,28 @@ fn router(_state: AppState) -> Router<AppState> {
             "/profile/games/{shop}/{object_id}/artwork/{kind}",
             put(artwork::save).delete(artwork::delete),
         )
+        /* Cloud Save V2 (launcher 4.1.0+). Static segments before the
+           parameterised /profile/games routes, same reason as artwork. */
+        .route(
+            "/profile/cloud-saves/snapshots",
+            get(cloud_saves::list_snapshots).delete(cloud_saves::delete_snapshots),
+        )
+        .route(
+            "/profile/cloud-saves/prepare-snapshot",
+            post(cloud_saves::prepare_snapshot),
+        )
+        .route(
+            "/profile/cloud-saves/commit-snapshot",
+            post(cloud_saves::commit_snapshot),
+        )
+        .route(
+            "/profile/cloud-saves/snapshot-restore-manifest",
+            get(cloud_saves::restore_manifest),
+        )
+        .route(
+            "/profile/cloud-saves/snapshot-download-urls",
+            get(cloud_saves::snapshot_download_urls),
+        )
         .route("/profile/games/achievements", put(achievements::sync))
         .route(
             "/profile/games/achievements/{id}",
@@ -192,6 +215,7 @@ fn router(_state: AppState) -> Router<AppState> {
 
     Router::new()
         .route("/health", get(health))
+        .route("/capabilities", get(capabilities))
         .merge(api_routes)
         .merge(storage_routes)
         .merge(admin::router())
@@ -204,5 +228,34 @@ async fn health() -> Json<serde_json::Value> {
         "status": "ok",
         "name": "hydra-server",
         "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+/// What this server can actually do, so the launcher never enables a feature
+/// whose endpoints aren't here.
+///
+/// Upstream keeps adding subscription-gated features that the launcher routes
+/// straight to whichever server is configured; without this the launcher can
+/// only find out by getting a 404 mid-sync. `features` is the contract — the
+/// launcher matches on those strings, and `version` (kept in step with the
+/// launcher release this server targets) is only for display and support.
+///
+/// Unauthenticated on purpose: the launcher needs it before it has decided
+/// whether the server is usable at all, and it discloses nothing user-specific.
+async fn capabilities() -> Json<serde_json::Value> {
+    Json(json!({
+        "name": "hydra-server",
+        "version": env!("CARGO_PKG_VERSION"),
+        "features": [
+            "cloud-saves-v2",
+            "cloud-saves-legacy",
+            "emulation-saves",
+            "custom-artwork",
+            "achievements",
+            "playtime",
+            "download-sources",
+            "banners",
+            "artifact-shares",
+        ],
     }))
 }

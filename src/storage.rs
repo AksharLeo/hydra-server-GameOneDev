@@ -8,6 +8,7 @@ use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 const UPLOAD_TOKEN_TTL_SECONDS: i64 = 60 * 60;
@@ -25,11 +26,21 @@ pub struct StorageClaims {
     /// max upload size in bytes (uploads only)
     pub max: u64,
     pub exp: i64,
+    /// Expected lowercase-hex SHA-256 of the uploaded bytes (Cloud Save V2
+    /// blobs). When set the body is hashed as it streams and rejected on
+    /// mismatch, so a content-addressed key can never end up holding bytes
+    /// that don't match the hash it is named after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
-/// Total bytes a user is storing here: save backups, emulation saves and
-/// uploaded custom images. Everything the per-user quota is measured against
-/// lives in one place so the quota check and the admin panel can't drift.
+/// Total bytes a user is storing here: save backups, emulation saves,
+/// uploaded custom images and Cloud Save V2 blobs. Everything the per-user
+/// quota is measured against lives in one place so the quota check and the
+/// admin panel can't drift.
+///
+/// V2 blobs are counted once per distinct hash, which is also how they are
+/// stored — a file duplicated across variants or games costs nothing extra.
 pub async fn used_bytes(state: &AppState, user_id: &str) -> ApiResult<i64> {
     let used: i64 = sqlx::query_scalar(
         "SELECT (SELECT COALESCE(SUM(artifact_length_in_bytes), 0)
@@ -37,13 +48,38 @@ pub async fn used_bytes(state: &AppState, user_id: &str) -> ApiResult<i64> {
               + (SELECT COALESCE(SUM(artifact_length_in_bytes), 0)
                    FROM emulation_saves WHERE user_id = ?1)
               + (SELECT COALESCE(SUM(size_in_bytes), 0)
-                   FROM game_artwork WHERE user_id = ?1)",
+                   FROM game_artwork WHERE user_id = ?1)
+              + (SELECT COALESCE(SUM(size_in_bytes), 0)
+                   FROM cloud_save_blobs WHERE user_id = ?1)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
 
     Ok(used)
+}
+
+/// Storage key for a Cloud Save V2 blob. Content-addressed and namespaced per
+/// user so one user's bytes are never served to another.
+pub fn cloud_save_blob_key(user_id: &str, hash: &str) -> String {
+    format!("cloud-saves/{user_id}/{hash}")
+}
+
+/// Presigned PUT for a Cloud Save V2 blob, bound to the hash it must contain.
+pub fn sign_blob_upload_url(
+    state: &AppState,
+    user_id: &str,
+    hash: &str,
+    size_bytes: u64,
+) -> String {
+    sign_url_with_hash(
+        state,
+        "put",
+        &cloud_save_blob_key(user_id, hash),
+        size_bytes,
+        UPLOAD_TOKEN_TTL_SECONDS,
+        Some(hash.to_string()),
+    )
 }
 
 pub fn sign_upload_url(state: &AppState, key: &str, max_bytes: u64) -> String {
@@ -55,11 +91,23 @@ pub fn sign_download_url(state: &AppState, key: &str) -> String {
 }
 
 fn sign_url(state: &AppState, op: &str, key: &str, max: u64, ttl: i64) -> String {
+    sign_url_with_hash(state, op, key, max, ttl, None)
+}
+
+fn sign_url_with_hash(
+    state: &AppState,
+    op: &str,
+    key: &str,
+    max: u64,
+    ttl: i64,
+    sha256: Option<String>,
+) -> String {
     let claims = StorageClaims {
         op: op.to_string(),
         key: key.to_string(),
         max,
         exp: Utc::now().timestamp() + ttl,
+        sha256,
     };
 
     let token = encode(
@@ -148,6 +196,16 @@ pub async fn upload(
         _ => return Err(ApiError::bad_request("invalid chunk range")),
     };
 
+    /* Hash-bound keys (Cloud Save V2 blobs) are verified as the body streams,
+       which only works when the whole object arrives in one request. The
+       launcher uploads these in a single PUT; refuse chunking rather than
+       quietly storing unverified bytes under a content-addressed name. */
+    if claims.sha256.is_some() && (offset != 0 || total.is_some()) {
+        return Err(ApiError::bad_request(
+            "chunked upload is not supported for content-addressed objects",
+        ));
+    }
+
     let size_limit = if claims.max > 0 {
         /* `max` is the size the launcher declared when it created the
            artifact; a little slack covers metadata drift between stat()
@@ -191,10 +249,15 @@ pub async fn upload(
 
     let mut written: u64 = offset;
     let mut stream = body.into_data_stream();
+    let mut digest = claims.sha256.as_ref().map(|_| Sha256::new());
 
     while let Some(chunk) = stream.next().await {
         let chunk =
             chunk.map_err(|_| ApiError::bad_request("upload interrupted"))?;
+
+        if let Some(digest) = digest.as_mut() {
+            digest.update(&chunk);
+        }
 
         written += chunk.len() as u64;
 
@@ -226,6 +289,16 @@ pub async fn upload(
 
     if !complete {
         return Ok(StatusCode::OK);
+    }
+
+    if let (Some(digest), Some(expected)) = (digest, claims.sha256.as_deref()) {
+        let actual = hex::encode(digest.finalize());
+        if !actual.eq_ignore_ascii_case(expected) {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(ApiError::bad_request(
+                "uploaded bytes do not match the declared SHA-256",
+            ));
+        }
     }
 
     tokio::fs::rename(&temp_path, &path).await?;
