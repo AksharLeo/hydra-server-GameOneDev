@@ -72,23 +72,70 @@ are stored in the database and override the environment until reset.
 
 ### Admin panel
 
-Open `https://your-server/admin`, sign in with `HYDRA_ADMIN_PASSWORD`:
+Open `https://your-server/admin` and sign in with `HYDRA_ADMIN_PASSWORD`. The
+panel is a full operations console for the server, in seven screens.
 
-- overview of users, cloud saves, backups, shares, achievements and total
-  storage
-- server info: version, uptime, database size and effective configuration
-- edit settings without a restart: per-user quota, backups-per-game limit and
-  the allowed-users list, applied immediately and persisted across restarts
-- per-user detail: profile info plus Cloud Save V2 snapshots, legacy save
-  backups, achievements and emulation saves — every game shows its name and
-  cover art (resolved from the Steam store and cached) instead of the raw shop
-  id
-- V2 snapshots list their version, file count and host, expand to the full
-  manifest, and flag uploads that never committed as pending; individual files
-  can be downloaded straight out of a snapshot
-- download or delete any backup, snapshot or emulation save — deleting a
-  snapshot frees the blobs nothing else references
-- block/unblock users, delete all of a user's data
+**Overview** — headline totals (users, storage, cloud saves, backups), a
+30-day activity chart, a live feed of what launchers have been doing, the
+biggest users and games, and a year of playtime. Anything that needs a human
+gets an alert at the top with the screen that fixes it: uploads that never
+finished, saves whose bytes are missing, users sitting at their quota.
+
+**Users** — searchable, sortable directory with storage against quota. Each
+account opens onto its own screen: what it stores broken down by kind, the
+machines it syncs from (hostname, platform, last seen), its top games, and
+tabs for saves, achievements, custom images, shares, download sources and
+activity. Blocking, a per-category data purge, and full deletion live there
+too, with byte counts reported for whatever was freed.
+
+**Saves** — every stored save on the server in one filterable table, across
+all three generations: Cloud Save V2 snapshots, legacy tarball backups and
+emulation memory cards. Filter by kind, owner, game or state; sort by size to
+find what is eating disk. V2 snapshots expand into their file manifest — each
+file with its hash, size and a download of its own — and flag any file whose
+bytes never arrived. Backups can be downloaded, frozen (exempt from the
+per-game limit) or deleted.
+
+**Games** — the same data pivoted by game: who plays it, what they store, how
+long they have played, which custom art they picked. Names and covers resolve
+from the Steam store and cache; a game whose lookup failed can be retried from
+its own page.
+
+**Storage** — usage measured from disk rather than the database, per area,
+next to what the database expects, so drift is visible. The integrity scan
+reconciles both directions: rows whose bytes are gone (a restore would come
+back short) and files no row points at (space nothing will reclaim). It only
+reports — deleting is a separate, explicit step.
+
+**Maintenance** — the housekeeping the server otherwise only does lazily:
+sweep abandoned uploads, collect orphaned blobs, delete orphaned files,
+re-resolve missing game metadata, clear the token cache, compact the database.
+Each reports what it actually changed. There is also a JSON export of the
+whole inventory.
+
+**Settings** — per-user quota, backups-per-game limit and the allowed-users
+list, applied immediately and persisted. Each value shows all three layers:
+the environment default, whether an override is saved, and what is in force.
+
+Everywhere else: ⌘K (Ctrl-K) opens a command palette that jumps to any screen
+or searches users and games, and the panel follows your system light/dark
+theme with a toggle to override it.
+
+#### Extending the panel
+
+The panel is deliberately modular, one module per screen:
+
+| Layer | Where |
+| --- | --- |
+| API routes | `src/admin/<area>.rs`, merged in `src/admin/mod.rs` |
+| Screen | `static/admin/js/views/<area>.js`, routed in `js/main.js` |
+| Navigation | the `NAV` table in `js/components/shell.js` |
+| Shared UI | `js/components/` — tables, charts, dialogs, toasts, palette |
+
+A new screen is a new module, a new view file and one line in each of the
+three registries; nothing else needs to change. The front end is embedded in
+the binary (`src/admin/assets.rs`), so there is still only one artifact to
+deploy — add a file there when you add one to `static/admin/`.
 
 ## API surface
 
