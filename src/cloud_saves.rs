@@ -807,7 +807,10 @@ async fn sweep_stale_pending(state: &AppState, user_id: &str) -> ApiResult<()> {
 
 /// Deletes blobs no manifest row references any more, on disk and in the
 /// blob table, so the quota reflects only live data.
-async fn collect_orphan_blobs(state: &AppState, user_id: &str) -> ApiResult<()> {
+///
+/// The admin panel calls this too, after deleting a snapshot on a user's
+/// behalf.
+pub async fn collect_orphan_blobs(state: &AppState, user_id: &str) -> ApiResult<()> {
     let orphans: Vec<String> = sqlx::query_scalar(
         "SELECT b.hash FROM cloud_save_blobs b
          WHERE b.user_id = ?

@@ -63,7 +63,7 @@ subscription needed.
 | `HYDRA_OFFICIAL_API_URL` | `https://hydra-api-us-east-1.losbroxas.org` | Official API used to validate launcher tokens. If token validation fails with your launcher build, set this to the same API URL the launcher was built with (`MAIN_VITE_API_URL`) |
 | `HYDRA_ADMIN_PASSWORD` | *(empty)* | Password for `/admin`. Panel is disabled while empty |
 | `HYDRA_SERVER_SECRET` | auto-generated | Secret signing storage URLs and admin sessions; persisted to `<data dir>/.secret` when auto-generated |
-| `HYDRA_MAX_BYTES_PER_USER` | `0` (unlimited) | Per-user storage quota in bytes — counts save backups, emulation saves and uploaded custom images |
+| `HYDRA_MAX_BYTES_PER_USER` | `0` (unlimited) | Per-user storage quota in bytes — counts save backups, Cloud Save V2 blobs (once per distinct file), emulation saves and uploaded custom images |
 | `HYDRA_BACKUPS_PER_GAME_LIMIT` | `100` | Max save backups per game per user |
 | `HYDRA_ALLOWED_USERS` | *(empty = everyone)* | Comma-separated official user ids or usernames allowed to use this server |
 
@@ -74,14 +74,20 @@ are stored in the database and override the environment until reset.
 
 Open `https://your-server/admin`, sign in with `HYDRA_ADMIN_PASSWORD`:
 
-- overview of users, backups, shares, achievements and total storage
+- overview of users, cloud saves, backups, shares, achievements and total
+  storage
 - server info: version, uptime, database size and effective configuration
 - edit settings without a restart: per-user quota, backups-per-game limit and
   the allowed-users list, applied immediately and persisted across restarts
-- per-user detail: profile info plus save backups, achievements and emulation
-  saves — backups show the game's name and cover art (resolved from the Steam
-  store and cached) instead of the raw shop id
-- download or delete any backup
+- per-user detail: profile info plus Cloud Save V2 snapshots, legacy save
+  backups, achievements and emulation saves — every game shows its name and
+  cover art (resolved from the Steam store and cached) instead of the raw shop
+  id
+- V2 snapshots list their version, file count and host, expand to the full
+  manifest, and flag uploads that never committed as pending; individual files
+  can be downloaded straight out of a snapshot
+- download or delete any backup, snapshot or emulation save — deleting a
+  snapshot frees the blobs nothing else references
 - block/unblock users, delete all of a user's data
 
 ## API surface

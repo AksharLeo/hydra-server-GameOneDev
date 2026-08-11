@@ -1,6 +1,6 @@
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, RuntimeSettings};
-use crate::{games, settings, storage};
+use crate::{cloud_saves, games, settings, storage};
 use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::{header, request::Parts};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -84,6 +84,12 @@ pub fn router() -> Router<AppState> {
         .route("/admin/api/users/{id}/block", post(set_blocked))
         .route("/admin/api/artifacts/{id}", delete(delete_artifact))
         .route("/admin/api/artifacts/{id}/download", get(download_artifact))
+        .route("/admin/api/cloud-saves/{id}", delete(delete_snapshot))
+        .route("/admin/api/cloud-saves/{id}/files", get(snapshot_files))
+        .route(
+            "/admin/api/cloud-saves/{id}/files/{hash}/download",
+            get(download_snapshot_file),
+        )
         .route("/admin/api/emulation-saves/{id}", delete(delete_emulation_save))
 }
 
@@ -164,6 +170,29 @@ async fn overview(State(state): State<AppState>, _admin: AdminSession) -> ApiRes
     )
     .fetch_one(&state.pool)
     .await?;
+    /* Cloud Save V2. One committed snapshot exists per game, so counting them
+       counts synced games; pending ones are uploads still in flight (or
+       abandoned, until the sweep drops them) and are reported separately so a
+       stuck upload is visible. Bytes come from the blob table rather than the
+       snapshots' declared sizes: blobs are deduplicated per user, and that is
+       what actually occupies disk and the quota. */
+    let cloud_save_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM cloud_save_snapshots WHERE status = 'committed'")
+            .fetch_one(&state.pool)
+            .await?;
+    let pending_cloud_save_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM cloud_save_snapshots WHERE status = 'pending'")
+            .fetch_one(&state.pool)
+            .await?;
+    let cloud_save_file_count: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(file_count), 0) FROM cloud_save_snapshots WHERE status = 'committed'",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    let cloud_save_bytes: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(size_in_bytes), 0) FROM cloud_save_blobs")
+            .fetch_one(&state.pool)
+            .await?;
     let achievement_game_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM game_achievements")
             .fetch_one(&state.pool)
@@ -205,7 +234,11 @@ async fn overview(State(state): State<AppState>, _admin: AdminSession) -> ApiRes
         "achievementGameCount": achievement_game_count,
         "sharedArtifactCount": shared_artifact_count,
         "customImageCount": artwork_count,
-        "totalBytes": artifact_bytes + save_bytes + artwork_bytes,
+        "cloudSaveCount": cloud_save_count,
+        "pendingCloudSaveCount": pending_cloud_save_count,
+        "cloudSaveFileCount": cloud_save_file_count,
+        "cloudSaveBytes": cloud_save_bytes,
+        "totalBytes": artifact_bytes + save_bytes + artwork_bytes + cloud_save_bytes,
         "databaseBytes": database_bytes,
         "maxBytesPerUser": current.max_bytes_per_user,
         "backupsPerGameLimit": current.backups_per_game_limit,
@@ -326,43 +359,59 @@ fn banner_url(state: &AppState, banner_key: Option<String>) -> Option<String> {
     })
 }
 
+/// Per-user counts and storage, shared by the user list and the detail view so
+/// the two can't disagree.
+///
+/// `total_bytes` mirrors [`storage::used_bytes`] — the same four sources the
+/// quota is measured against, Cloud Save V2 blobs included. V2 bytes come from
+/// the blob table rather than the snapshots' declared sizes: blobs are
+/// deduplicated per user, so a file shared across variants or games occupies
+/// disk (and quota) exactly once.
+const USER_AGGREGATES: &str = "
+    (SELECT COUNT(*) FROM artifacts a WHERE a.user_id = u.id) AS artifact_count,
+    (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM artifacts a WHERE a.user_id = u.id)
+      + (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM emulation_saves e WHERE e.user_id = u.id)
+      + (SELECT COALESCE(SUM(size_in_bytes), 0) FROM game_artwork w WHERE w.user_id = u.id)
+      + (SELECT COALESCE(SUM(size_in_bytes), 0) FROM cloud_save_blobs b WHERE b.user_id = u.id)
+      AS total_bytes,
+    (SELECT COUNT(*) FROM emulation_saves e WHERE e.user_id = u.id) AS save_count,
+    (SELECT COUNT(*) FROM game_artwork w WHERE w.user_id = u.id AND w.size_in_bytes > 0)
+      AS custom_image_count,
+    (SELECT COUNT(*) FROM game_achievements g WHERE g.user_id = u.id) AS achievement_games,
+    (SELECT COUNT(*) FROM cloud_save_snapshots s
+       WHERE s.user_id = u.id AND s.status = 'committed') AS cloud_save_count,
+    (SELECT COALESCE(SUM(size_in_bytes), 0) FROM cloud_save_blobs b WHERE b.user_id = u.id)
+      AS cloud_save_bytes";
+
+/// The shared shape of a user row, as both endpoints return it.
+fn user_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Value {
+    json!({
+        "id": row.get::<String, _>("id"),
+        "username": row.get::<Option<String>, _>("username"),
+        "displayName": row.get::<String, _>("display_name"),
+        "profileImageUrl": row.get::<Option<String>, _>("profile_image_url"),
+        "bannerUrl": banner_url(state, row.get("banner_key")),
+        "isBlocked": row.get::<i64, _>("is_blocked") != 0,
+        "lastSeenAt": row.get::<String, _>("last_seen_at"),
+        "createdAt": row.get::<String, _>("created_at"),
+        "artifactCount": row.get::<i64, _>("artifact_count"),
+        "emulationSaveCount": row.get::<i64, _>("save_count"),
+        "customImageCount": row.get::<i64, _>("custom_image_count"),
+        "achievementGameCount": row.get::<i64, _>("achievement_games"),
+        "cloudSaveCount": row.get::<i64, _>("cloud_save_count"),
+        "cloudSaveBytes": row.get::<i64, _>("cloud_save_bytes"),
+        "totalBytes": row.get::<i64, _>("total_bytes"),
+    })
+}
+
 async fn list_users(State(state): State<AppState>, _admin: AdminSession) -> ApiResult<Json<Value>> {
-    let rows = sqlx::query(
-        "SELECT u.*,
-            (SELECT COUNT(*) FROM artifacts a WHERE a.user_id = u.id) AS artifact_count,
-            (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM artifacts a WHERE a.user_id = u.id)
-              + (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM emulation_saves e WHERE e.user_id = u.id)
-              + (SELECT COALESCE(SUM(size_in_bytes), 0) FROM game_artwork w WHERE w.user_id = u.id)
-              AS total_bytes,
-            (SELECT COUNT(*) FROM emulation_saves e WHERE e.user_id = u.id) AS save_count,
-            (SELECT COUNT(*) FROM game_artwork w WHERE w.user_id = u.id AND w.size_in_bytes > 0)
-              AS custom_image_count,
-            (SELECT COUNT(*) FROM game_achievements g WHERE g.user_id = u.id) AS achievement_games
-         FROM users u ORDER BY u.last_seen_at DESC",
-    )
+    let rows = sqlx::query(&format!(
+        "SELECT u.*, {USER_AGGREGATES} FROM users u ORDER BY u.last_seen_at DESC"
+    ))
     .fetch_all(&state.pool)
     .await?;
 
-    let users: Vec<Value> = rows
-        .iter()
-        .map(|row| {
-            json!({
-                "id": row.get::<String, _>("id"),
-                "username": row.get::<Option<String>, _>("username"),
-                "displayName": row.get::<String, _>("display_name"),
-                "profileImageUrl": row.get::<Option<String>, _>("profile_image_url"),
-                "bannerUrl": banner_url(&state, row.get("banner_key")),
-                "isBlocked": row.get::<i64, _>("is_blocked") != 0,
-                "lastSeenAt": row.get::<String, _>("last_seen_at"),
-                "createdAt": row.get::<String, _>("created_at"),
-                "artifactCount": row.get::<i64, _>("artifact_count"),
-                "emulationSaveCount": row.get::<i64, _>("save_count"),
-                "customImageCount": row.get::<i64, _>("custom_image_count"),
-                "achievementGameCount": row.get::<i64, _>("achievement_games"),
-                "totalBytes": row.get::<i64, _>("total_bytes"),
-            })
-        })
-        .collect();
+    let users: Vec<Value> = rows.iter().map(|row| user_json(&state, row)).collect();
 
     Ok(Json(json!(users)))
 }
@@ -372,19 +421,9 @@ async fn user_details(
     _admin: AdminSession,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let user = sqlx::query(
-        "SELECT u.*,
-            (SELECT COUNT(*) FROM artifacts a WHERE a.user_id = u.id) AS artifact_count,
-            (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM artifacts a WHERE a.user_id = u.id)
-              + (SELECT COALESCE(SUM(artifact_length_in_bytes), 0) FROM emulation_saves e WHERE e.user_id = u.id)
-              + (SELECT COALESCE(SUM(size_in_bytes), 0) FROM game_artwork w WHERE w.user_id = u.id)
-              AS total_bytes,
-            (SELECT COUNT(*) FROM emulation_saves e WHERE e.user_id = u.id) AS save_count,
-            (SELECT COUNT(*) FROM game_artwork w WHERE w.user_id = u.id AND w.size_in_bytes > 0)
-              AS custom_image_count,
-            (SELECT COUNT(*) FROM game_achievements g WHERE g.user_id = u.id) AS achievement_games
-         FROM users u WHERE u.id = ?",
-    )
+    let user = sqlx::query(&format!(
+        "SELECT u.*, {USER_AGGREGATES} FROM users u WHERE u.id = ?"
+    ))
     .bind(&id)
     .fetch_optional(&state.pool)
     .await?
@@ -420,22 +459,21 @@ async fn user_details(
     .fetch_all(&state.pool)
     .await?;
 
+    /* Cloud Save V2 snapshots, pending ones included: an upload that never
+       committed is exactly what an admin needs to see when a user reports a
+       sync that didn't stick. */
+    let snapshots = sqlx::query(
+        "SELECT s.*, g.name AS game_name, g.cover_url AS game_cover_url
+         FROM cloud_save_snapshots s
+         LEFT JOIN game_metadata g ON g.shop = s.shop AND g.object_id = s.object_id
+         WHERE s.user_id = ? ORDER BY s.updated_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
     Ok(Json(json!({
-        "user": {
-            "id": user.get::<String, _>("id"),
-            "username": user.get::<Option<String>, _>("username"),
-            "displayName": user.get::<String, _>("display_name"),
-            "profileImageUrl": user.get::<Option<String>, _>("profile_image_url"),
-            "bannerUrl": banner_url(&state, user.get("banner_key")),
-            "isBlocked": user.get::<i64, _>("is_blocked") != 0,
-            "createdAt": user.get::<String, _>("created_at"),
-            "lastSeenAt": user.get::<String, _>("last_seen_at"),
-            "artifactCount": user.get::<i64, _>("artifact_count"),
-            "emulationSaveCount": user.get::<i64, _>("save_count"),
-            "customImageCount": user.get::<i64, _>("custom_image_count"),
-            "achievementGameCount": user.get::<i64, _>("achievement_games"),
-            "totalBytes": user.get::<i64, _>("total_bytes"),
-        },
+        "user": user_json(&state, &user),
         "artifacts": artifacts.iter().map(|row| json!({
             "id": row.get::<String, _>("id"),
             "shop": row.get::<String, _>("shop"),
@@ -469,6 +507,25 @@ async fn user_details(
             "label": row.get::<Option<String>, _>("label"),
             "sizeBytes": row.get::<i64, _>("artifact_length_in_bytes"),
             "isUploaded": row.get::<i64, _>("is_uploaded") != 0,
+            "updatedAt": row.get::<String, _>("updated_at"),
+        })).collect::<Vec<_>>(),
+        "cloudSaves": snapshots.iter().map(|row| json!({
+            "id": row.get::<String, _>("id"),
+            "shop": row.get::<String, _>("shop"),
+            "objectId": row.get::<String, _>("object_id"),
+            "gameName": row.get::<Option<String>, _>("game_name"),
+            "gameCoverUrl": row.get::<Option<String>, _>("game_cover_url"),
+            "version": row.get::<i64, _>("version"),
+            "fileCount": row.get::<i64, _>("file_count"),
+            /* The manifest's own total, so it counts a file duplicated across
+               variants once per copy — what the launcher restores, not what
+               the deduplicated blobs occupy here. */
+            "sizeBytes": row.get::<i64, _>("total_size_in_bytes"),
+            "platform": row.get::<Option<String>, _>("platform"),
+            "hostname": row.get::<Option<String>, _>("hostname"),
+            "status": row.get::<String, _>("status"),
+            "aggregateHash": row.get::<String, _>("aggregate_hash"),
+            "createdAt": row.get::<String, _>("created_at"),
             "updatedAt": row.get::<String, _>("updated_at"),
         })).collect::<Vec<_>>(),
     })))
@@ -604,6 +661,15 @@ async fn delete_user(
             .fetch_all(&state.pool)
             .await?;
 
+    /* Cloud Save V2 blobs cascade out of the database with the user, so their
+       hashes have to be read before the delete or the bytes are stranded on
+       disk with nothing left pointing at them. */
+    let blob_hashes: Vec<String> =
+        sqlx::query_scalar("SELECT hash FROM cloud_save_blobs WHERE user_id = ?")
+            .bind(&id)
+            .fetch_all(&state.pool)
+            .await?;
+
     let artwork_keys = crate::artwork::storage_keys_for_user(&state, &id).await;
 
     sqlx::query("DELETE FROM users WHERE id = ?")
@@ -619,6 +685,18 @@ async fn delete_user(
     }
     for save_id in save_ids {
         storage::delete_object(&state, &format!("emulation-saves/{save_id}.bin")).await;
+    }
+    if !blob_hashes.is_empty() {
+        for hash in &blob_hashes {
+            storage::delete_object(&state, &storage::cloud_save_blob_key(&id, hash)).await;
+        }
+        /* Succeeds only once the user's blob directory is empty, which is
+           exactly when it should go. */
+        let _ = tokio::fs::remove_dir(storage::storage_path(
+            &state,
+            &format!("cloud-saves/{id}"),
+        ))
+        .await;
     }
 
     state.token_cache.write().await.clear();
@@ -661,6 +739,100 @@ async fn download_artifact(
 
     let url = storage::sign_download_url(&state, &format!("artifacts/{id}.tar"));
     Ok(Redirect::temporary(&url))
+}
+
+/// GET /admin/api/cloud-saves/{id}/files — the snapshot's manifest.
+///
+/// `stored` reports whether the blob is actually on disk: for a pending
+/// snapshot it shows how far an in-flight upload got, and for a committed one
+/// it would expose bytes lost underneath the database.
+async fn snapshot_files(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM cloud_save_snapshots WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let owner = owner.ok_or_else(|| ApiError::not_found("snapshot not found"))?;
+
+    let rows = sqlx::query(
+        "SELECT f.*, b.hash IS NOT NULL AS stored
+         FROM cloud_save_snapshot_files f
+         LEFT JOIN cloud_save_blobs b ON b.user_id = ? AND b.hash = f.hash
+         WHERE f.snapshot_id = ?
+         ORDER BY f.raw_path, f.relative_path",
+    )
+    .bind(&owner)
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!(rows
+        .iter()
+        .map(|row| json!({
+            "variantId": row.get::<String, _>("variant_id"),
+            "rawPath": row.get::<String, _>("raw_path"),
+            "relativePath": row.get::<String, _>("relative_path"),
+            "hash": row.get::<String, _>("hash"),
+            "sizeBytes": row.get::<i64, _>("size_in_bytes"),
+            "lastModifiedAt": row.get::<String, _>("last_modified_at"),
+            "stored": row.get::<i64, _>("stored") != 0,
+        }))
+        .collect::<Vec<_>>())))
+}
+
+/// GET /admin/api/cloud-saves/{id}/files/{hash}/download — one file out of a
+/// snapshot. The hash has to belong to the snapshot, so this can't be used to
+/// read arbitrary blobs of an arbitrary user.
+async fn download_snapshot_file(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    Path((id, hash)): Path<(String, String)>,
+) -> ApiResult<Redirect> {
+    let owner: Option<String> = sqlx::query_scalar(
+        "SELECT s.user_id FROM cloud_save_snapshots s
+         JOIN cloud_save_snapshot_files f ON f.snapshot_id = s.id
+         WHERE s.id = ? AND f.hash = ? LIMIT 1",
+    )
+    .bind(&id)
+    .bind(&hash)
+    .fetch_optional(&state.pool)
+    .await?;
+    let owner = owner.ok_or_else(|| ApiError::not_found("snapshot file not found"))?;
+
+    let url = storage::sign_download_url(&state, &storage::cloud_save_blob_key(&owner, &hash));
+    Ok(Redirect::temporary(&url))
+}
+
+/// DELETE /admin/api/cloud-saves/{id} — drops one snapshot and frees every
+/// blob it alone was keeping alive.
+async fn delete_snapshot(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM cloud_save_snapshots WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let owner = owner.ok_or_else(|| ApiError::not_found("snapshot not found"))?;
+
+    sqlx::query("DELETE FROM cloud_save_snapshot_files WHERE snapshot_id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM cloud_save_snapshots WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    cloud_saves::collect_orphan_blobs(&state, &owner).await?;
+
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn delete_emulation_save(

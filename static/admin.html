@@ -33,6 +33,12 @@
   td.banner-cell { background-size: cover; background-position: center; }
   table.kv th { width: 200px; background: var(--panel); text-transform: none; font-size: 13px; letter-spacing: 0; }
   table.kv td { word-break: break-all; }
+  /* Expanded snapshot manifest, nested inside a cloud-save row. */
+  td.files-cell { padding: 0; background: var(--panel-2); border-left: 3px solid var(--accent); }
+  table.files { border: none; border-radius: 0; background: transparent; }
+  table.files th, table.files td { padding: 6px 12px; font-size: 12px; }
+  table.files th { background: transparent; }
+  table.files tr:last-child td { border-bottom: none; }
   .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--panel-2); object-fit: cover; vertical-align: middle; margin-right: 8px; }
   .avatar.big { width: 56px; height: 56px; margin-right: 0; flex: none; }
   .game { display: flex; align-items: center; gap: 10px; min-width: 180px; }
@@ -154,7 +160,7 @@
     <h2 class="section-title">Users</h2>
     <table>
       <thead><tr>
-        <th>User</th><th>Backups</th><th>Emu saves</th><th>Achievements</th><th>Images</th>
+        <th>User</th><th>Cloud saves</th><th>Backups</th><th>Emu saves</th><th>Achievements</th><th>Images</th>
         <th>Storage used</th><th>Last seen</th><th>Status</th><th></th>
       </tr></thead>
       <tbody id="users"></tbody>
@@ -168,7 +174,14 @@
     <div class="panel">
       <div class="heatmap" id="user-playtime"></div>
     </div>
-    <h3 class="section-title">Cloud save backups</h3>
+    <h3 class="section-title">Cloud saves (v2)</h3>
+    <table>
+      <thead><tr>
+        <th>Game</th><th>Version</th><th>Files</th><th>Size</th><th>Host</th><th>Updated</th><th></th>
+      </tr></thead>
+      <tbody id="cloud-saves"></tbody>
+    </table>
+    <h3 class="section-title">Save backups (legacy)</h3>
     <table>
       <thead><tr>
         <th>Game</th><th>Label</th><th>Size</th><th>Host</th><th>Shared</th><th>Frozen</th><th>Created</th><th></th>
@@ -338,9 +351,15 @@ async function loadOverview() {
   quotaBytes = data.maxBytesPerUser || 0;
   $("public-url").textContent = data.publicUrl;
 
+  /* Two generations of save sync live side by side: V2 snapshots (Steam
+     games on launcher 4.1.0+) and the legacy tarball backups everything else
+     still uses. */
   $("cards").innerHTML = [
     ["Users", data.userCount, data.blockedUserCount ? `${data.blockedUserCount} blocked` : ""],
-    ["Save backups", data.artifactCount, data.sharedArtifactCount ? `${data.sharedArtifactCount} shared` : ""],
+    ["Cloud saves (v2)", data.cloudSaveCount,
+      `${data.cloudSaveFileCount} files · ${fmtBytes(data.cloudSaveBytes)} deduplicated`
+      + (data.pendingCloudSaveCount ? ` · ${data.pendingCloudSaveCount} pending` : "")],
+    ["Save backups (legacy)", data.artifactCount, data.sharedArtifactCount ? `${data.sharedArtifactCount} shared` : ""],
     ["Emulation saves", data.emulationSaveCount, ""],
     ["Achievement games", data.achievementGameCount, "synced game entries"],
     ["Custom images", data.customImageCount, "uploaded covers, icons, logos"],
@@ -417,6 +436,7 @@ async function loadUsers() {
         <strong>${esc(u.displayName)}</strong>
         <span class="muted">${u.username ? "@" + esc(u.username) : ""}</span>
       </td>
+      <td>${u.cloudSaveCount}</td>
       <td>${u.artifactCount}</td>
       <td>${u.emulationSaveCount}</td>
       <td>${u.achievementGameCount}</td>
@@ -429,7 +449,7 @@ async function loadUsers() {
         <button class="danger" data-action="delete">Delete data</button>
       </td>
     </tr>
-  `).join("") || '<tr><td colspan="9" class="muted">No users yet — they appear after the first launcher request.</td></tr>';
+  `).join("") || '<tr><td colspan="10" class="muted">No users yet — they appear after the first launcher request.</td></tr>';
 }
 
 $("users").addEventListener("click", async (event) => {
@@ -515,11 +535,29 @@ async function openUser(id) {
       </div>
       <div class="muted mono">${esc(u.id)}</div>
       <div class="muted">First seen ${fmtDate(u.createdAt)} · last seen ${fmtDate(u.lastSeenAt)}</div>
-      <div class="muted">${u.artifactCount} backups · ${u.emulationSaveCount} emu saves · ${u.achievementGameCount} games with achievements · ${u.customImageCount} custom images · ${fmtBytes(u.totalBytes)} used${quotaBytes ? ` of ${fmtBytes(quotaBytes)}` : ""}</div>
+      <div class="muted">${u.cloudSaveCount} cloud saves (v2) · ${u.artifactCount} legacy backups · ${u.emulationSaveCount} emu saves · ${u.achievementGameCount} games with achievements · ${u.customImageCount} custom images · ${fmtBytes(u.totalBytes)} used${quotaBytes ? ` of ${fmtBytes(quotaBytes)}` : ""}</div>
     </div>
     <div class="spacer"></div>
     <button id="detail-block" data-blocked="${u.isBlocked}">${u.isBlocked ? "Unblock" : "Block"}</button>
   `;
+
+  /* One committed snapshot per game is the current save; a pending row is an
+     upload that never committed, which is what a "my save didn't sync" report
+     looks like from here. */
+  $("cloud-saves").innerHTML = data.cloudSaves.map((s) => `
+    <tr>
+      <td>${gameCell(s.shop, s.objectId, s.gameName, s.gameCoverUrl)}</td>
+      <td>v${s.version}${s.status === "pending" ? ' <span class="pill bad">pending</span>' : ""}</td>
+      <td>${s.fileCount}</td>
+      <td>${fmtBytes(s.sizeBytes)}</td>
+      <td class="muted">${esc(s.hostname || "—")}${s.platform ? ` (${esc(s.platform)})` : ""}</td>
+      <td class="muted">${fmtDate(s.updatedAt)}</td>
+      <td style="white-space:nowrap">
+        <button data-files="${esc(s.id)}">Files</button>
+        <button class="danger" data-del-snapshot="${esc(s.id)}">Delete</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="7" class="muted">No cloud saves — launcher 4.1.0+ syncs Steam games here.</td></tr>';
 
   $("artifacts").innerHTML = data.artifacts.map((a) => `
     <tr>
@@ -562,7 +600,46 @@ async function openUser(id) {
     .then((entries) => renderHeatmap($("user-playtime"), entries, false))
     .catch(() => { $("user-playtime").innerHTML = ""; });
 
-  resolveGames([...data.artifacts, ...data.achievements]);
+  resolveGames([...data.cloudSaves, ...data.artifacts, ...data.achievements]);
+}
+
+/* Expands a snapshot into its manifest — the individual files the launcher
+   would restore, each downloadable on its own. */
+async function toggleSnapshotFiles(id, button) {
+  const row = button.closest("tr");
+  const open = row.nextElementSibling;
+  if (open && open.dataset.filesFor === id) {
+    open.remove();
+    button.textContent = "Files";
+    return;
+  }
+
+  button.disabled = true;
+  let files;
+  try {
+    files = await api(`/admin/api/cloud-saves/${id}/files`);
+  } finally {
+    button.disabled = false;
+  }
+
+  const holder = document.createElement("tr");
+  holder.dataset.filesFor = id;
+  holder.innerHTML = `<td class="files-cell" colspan="7">
+    <table class="files">
+      <thead><tr><th>Path</th><th>Size</th><th>Modified</th><th>Hash</th><th></th></tr></thead>
+      <tbody>${files.map((f) => `
+        <tr>
+          <td>${esc(f.rawPath)}/${esc(f.relativePath)}</td>
+          <td>${fmtBytes(f.sizeBytes)}${f.stored ? "" : ' <span class="pill bad">not uploaded</span>'}</td>
+          <td class="muted">${fmtDate(f.lastModifiedAt)}</td>
+          <td class="muted mono" title="${esc(f.hash)}">${esc(f.hash.slice(0, 12))}</td>
+          <td>${f.stored ? `<button data-blob-hash="${esc(f.hash)}">Download</button>` : ""}</td>
+        </tr>
+      `).join("") || '<tr><td colspan="5" class="muted">Empty manifest.</td></tr>'}</tbody>
+    </table>
+  </td>`;
+  row.after(holder);
+  button.textContent = "Hide files";
 }
 
 $("user-head").addEventListener("click", async (event) => {
@@ -578,7 +655,23 @@ $("detail").addEventListener("click", async (event) => {
   const download = event.target.dataset.download;
   const delArtifact = event.target.dataset.delArtifact;
   const delSave = event.target.dataset.delSave;
+  const files = event.target.dataset.files;
+  const delSnapshot = event.target.dataset.delSnapshot;
+  const blobHash = event.target.dataset.blobHash;
 
+  if (files) return toggleSnapshotFiles(files, event.target);
+  if (blobHash) {
+    const holder = event.target.closest("tr[data-files-for]");
+    window.open(
+      `/admin/api/cloud-saves/${holder.dataset.filesFor}/files/${blobHash}/download`,
+      "_blank",
+    );
+  }
+  if (delSnapshot && confirm("Delete this cloud save? The user's launcher will re-upload it on the next sync.")) {
+    await api(`/admin/api/cloud-saves/${delSnapshot}`, { method: "DELETE" });
+    openUser(currentUser);
+    loadOverview();
+  }
   if (download) window.open(`/admin/api/artifacts/${download}/download`, "_blank");
   if (delArtifact && confirm("Delete this backup?")) {
     await api(`/admin/api/artifacts/${delArtifact}`, { method: "DELETE" });
