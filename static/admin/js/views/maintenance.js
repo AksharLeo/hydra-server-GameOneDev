@@ -1,20 +1,25 @@
 /** Operations that would otherwise only happen lazily, on demand. */
 
-import { h, icon } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { card, pill, confirm, toast } from "../components/ui.js";
+import { h, icon } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api, download } from "/assets/shared/js/api.js";
+import { card, pill, confirm, toast, emptyState } from "/assets/shared/js/components/ui.js";
+import { dataTable } from "/assets/shared/js/components/table.js";
 
 export default {
   title: "Maintenance",
   subtitle: "Run the housekeeping this server normally does on its own",
 
   async render(ctx) {
-    const { actions } = await api.get("/admin/api/maintenance");
+    const [{ actions }, backups] = await Promise.all([
+      api.get("/admin/api/maintenance"),
+      api.get("/admin/api/backups"),
+    ]);
 
     return h(
       "div",
       { class: "grid" },
+      backupsCard(backups, ctx),
       h(
         "div",
         { class: "grid cols-2" },
@@ -24,6 +29,99 @@ export default {
     );
   },
 };
+
+/**
+ * Database backups.
+ *
+ * The save files on disk are easy to copy with any tool; the database is the
+ * part that maps them back to games and users, and losing it turns every blob
+ * into an unidentifiable file.
+ */
+function backupsCard(data, ctx) {
+  const disk = data.disk.totalBytes
+    ? `${fmt.bytes(data.disk.freeBytes)} free of ${fmt.bytes(data.disk.totalBytes)}`
+    : "";
+
+  return card({
+    title: "Database backups",
+    subtitle: data.schedule.intervalHours
+      ? `every ${data.schedule.intervalHours}h, keeping ${data.schedule.keep}`
+      : "automatic backups are off",
+    actions: h("button", {
+      class: "btn primary",
+      text: "Back up now",
+      onclick: async (event) => {
+        event.target.disabled = true;
+        try {
+          const result = await api.post("/admin/api/backups");
+          toast(`Backup written — ${fmt.bytes(result.backup.bytes)}`, "good");
+          ctx.refresh();
+        } catch (error) {
+          toast(error.message, "critical");
+          event.target.disabled = false;
+        }
+      },
+    }),
+    body: h(
+      "div",
+      {},
+      h(
+        "div",
+        { class: "card-body tight row wrap", style: { gap: "18px" } },
+        h("span", { class: "muted small mono", text: data.directory }),
+        disk ? h("span", { class: "muted small", text: disk }) : null,
+      ),
+      data.backups.length
+        ? dataTable({
+            columns: [
+              { key: "name", label: "File", render: (row) => h("span", { class: "mono", text: row.name }) },
+              { key: "size", label: "Size", align: "right", render: (row) => fmt.bytes(row.bytes) },
+              {
+                key: "created",
+                label: "Created",
+                render: (row) =>
+                  h("span", { class: "muted", title: fmt.dateTime(row.createdAt), text: fmt.relative(row.createdAt) }),
+              },
+              {
+                key: "actions",
+                label: "",
+                class: "actions",
+                render: (row) => [
+                  h("button", {
+                    class: "btn small",
+                    text: "Download",
+                    onclick: () =>
+                      download(`/admin/api/backups/${encodeURIComponent(row.name)}/download`),
+                  }),
+                  h("button", {
+                    class: "btn small danger",
+                    text: "Delete",
+                    onclick: async () => {
+                      const ok = await confirm({
+                        title: "Delete this backup?",
+                        body: `${row.name} (${fmt.bytes(row.bytes)}) is removed from disk.`,
+                        confirmLabel: "Delete",
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      await api.del(`/admin/api/backups/${encodeURIComponent(row.name)}`);
+                      toast("Backup deleted", "good");
+                      ctx.refresh();
+                    },
+                  }),
+                ],
+              },
+            ],
+            rows: data.backups,
+          })
+        : emptyState(
+            "No backups yet",
+            "Take one now, or wait for the scheduled run.",
+            "storage",
+          ),
+    ),
+  });
+}
 
 function actionCard(action, ctx) {
   const output = h("div", {});

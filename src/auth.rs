@@ -85,7 +85,7 @@ async fn resolve_user(state: &AppState, token: &str) -> Result<AuthenticatedUser
         }
     }
 
-    let user = verify_with_official_api(state, token).await?;
+    let user = verify_token(state, token).await?;
     upsert_user(state, &user).await?;
 
     let mut cache = state.token_cache.write().await;
@@ -106,7 +106,11 @@ async fn resolve_user(state: &AppState, token: &str) -> Result<AuthenticatedUser
     Ok(user)
 }
 
-async fn verify_with_official_api(
+/// Asks the official API who a token belongs to.
+///
+/// Public because the portal signs people in with credentials rather than a
+/// header, and must reach the same verdict from the same authority.
+pub async fn verify_token(
     state: &AppState,
     token: &str,
 ) -> Result<AuthenticatedUser, ApiError> {
@@ -155,7 +159,8 @@ async fn verify_with_official_api(
     })
 }
 
-async fn upsert_user(state: &AppState, user: &AuthenticatedUser) -> Result<(), ApiError> {
+/// Mirrors the official profile into the local users table.
+pub async fn upsert_user(state: &AppState, user: &AuthenticatedUser) -> Result<(), ApiError> {
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

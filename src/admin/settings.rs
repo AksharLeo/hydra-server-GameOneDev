@@ -7,6 +7,7 @@
 
 use super::AdminSession;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::settings as store;
 use crate::state::{AppState, RuntimeSettings};
 use axum::extract::State;
@@ -97,6 +98,19 @@ async fn update_settings(
     }
 
     reload(&state).await;
+
+    let current = state.settings.read().await.clone();
+    crate::events::record(
+        &state,
+        Event::admin("admin.settings.updated", "Settings changed")
+            .detail(json!({
+                "maxBytesPerUser": current.max_bytes_per_user,
+                "backupsPerGameLimit": current.backups_per_game_limit,
+                "allowedUsers": current.allowed_users,
+            })),
+    )
+    .await;
+
     payload(&state).await
 }
 
@@ -107,6 +121,13 @@ async fn reset_settings(
 ) -> ApiResult<Json<Value>> {
     store::clear(&state.pool).await?;
     reload(&state).await;
+
+    crate::events::record(
+        &state,
+        Event::admin("admin.settings.reset", "Settings reset to the environment values"),
+    )
+    .await;
+
     payload(&state).await
 }
 

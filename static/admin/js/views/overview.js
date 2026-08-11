@@ -1,22 +1,17 @@
 /** The dashboard: is anything wrong, what is here, what changed lately. */
 
-import { h, icon, fill } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { overview as loadOverview } from "../store.js";
-import { navigate } from "../router.js";
-import { card, statTile, alertRow, emptyState } from "../components/ui.js";
-import { areaChart, stackedBar, barList, heatmap } from "../components/charts.js";
+import { h, icon, fill } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { overview as loadOverview } from "/assets/admin/js/store.js";
+import { navigate } from "/assets/shared/js/router.js";
+import { card, statTile, alertRow, emptyState, pill } from "/assets/shared/js/components/ui.js";
+import { areaChart, stackedBar, barList, heatmap } from "/assets/shared/js/components/charts.js";
 
-const KIND_META = {
-  cloudSave: ["saves", "synced a cloud save"],
-  backup: ["saves", "uploaded a backup"],
-  emulationSave: ["saves", "synced an emulation save"],
-  achievements: ["trophy", "synced achievements"],
-  artwork: ["image", "changed a custom image"],
-  share: ["share", "shared a backup"],
-  signup: ["user", "first signed in"],
-};
+/* Events already carry a human summary, so the feed only has to pick an icon
+   and get out of the way. */
+const CATEGORY_ICONS = { sync: "saves", admin: "tools", auth: "user", system: "storage" };
+const SEVERITY_TONE = { critical: "critical", warning: "warning", info: "" };
 
 export default {
   title: "Overview",
@@ -26,7 +21,7 @@ export default {
     const [data, trends, activity, playtime] = await Promise.all([
       loadOverview({ force: true }),
       api.get("/admin/api/trends", { days: 30 }),
-      api.get("/admin/api/activity", { limit: 12 }),
+      api.get("/admin/api/events", { perPage: 12 }),
       api.get("/admin/api/playtime", { days: 364 }),
     ]);
 
@@ -78,12 +73,12 @@ export default {
           title: "Recent activity",
           actions: h("button", {
             class: "btn small",
-            text: "All saves",
-            onclick: () => navigate("/saves"),
+            text: "Full history",
+            onclick: () => navigate("/events"),
           }),
-          body: activity.length
-            ? h("div", { class: "card-body", style: { display: "grid", gap: "14px" } }, ...activity.map(activityRow))
-            : emptyState("Nothing has happened yet", "Launcher activity shows up here as it arrives.", "clock"),
+          body: activity.rows.length
+            ? h("div", { class: "card-body", style: { display: "grid", gap: "14px" } }, ...activity.rows.map(activityRow))
+            : emptyState("Nothing has happened yet", "Activity shows up here as it arrives.", "clock"),
         }),
         h(
           "div",
@@ -217,8 +212,8 @@ function activityChart(trends) {
             breakdown: (point) => {
               const source = byDay.get(point.day) ?? {};
               return Object.entries(source)
-                .filter(([key]) => KIND_META[key])
-                .map(([key, count]) => [KIND_META[key][1], fmt.number(count)]);
+                .filter(([key]) => CATEGORY_ICONS[key])
+                .map(([key, count]) => [key, fmt.number(count)]);
             },
           })
         : emptyState("No activity in this window", "Charts fill in as launchers sync.", "clock"),
@@ -253,12 +248,10 @@ function activityChart(trends) {
 }
 
 function activityRow(entry) {
-  const [iconName, verb] = KIND_META[entry.kind] ?? ["dot", entry.kind];
-
   return h(
     "div",
     { class: "row", style: { alignItems: "flex-start", gap: "12px" } },
-    icon(iconName, 15),
+    icon(CATEGORY_ICONS[entry.category] ?? "dot", 15),
     h(
       "div",
       { class: "stack", style: { flex: 1, minWidth: 0 } },
@@ -271,13 +264,13 @@ function activityRow(entry) {
               href: `#/users/${encodeURIComponent(entry.user.id)}`,
               text: entry.user.displayName || entry.user.id,
             })
-          : h("span", { class: "strong", text: "Someone" }),
-        h("span", { class: "muted small", text: verb }),
+          : h("span", { class: "strong", text: entry.actor ?? "server" }),
+        entry.severity !== "info" ? pill(entry.severity, SEVERITY_TONE[entry.severity]) : null,
       ),
+      h("span", { class: "small truncate", text: entry.summary }),
       entry.game?.objectId
-        ? h("span", { class: "small truncate", text: fmt.gameName(entry.game) })
+        ? h("span", { class: "muted small truncate", text: fmt.gameName(entry.game) })
         : null,
-      entry.detail ? h("span", { class: "muted small truncate", text: entry.detail }) : null,
     ),
     h(
       "div",

@@ -1,9 +1,9 @@
 /** One account: what it stores, where it syncs from, and what can be done to it. */
 
-import { h, icon } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { setQuery, navigate } from "../router.js";
+import { h, icon } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { setQuery, navigate } from "/assets/shared/js/router.js";
 import {
   card,
   statTile,
@@ -16,9 +16,9 @@ import {
   confirm,
   openModal,
   toast,
-} from "../components/ui.js";
-import { stackedBar, heatmap, barList } from "../components/charts.js";
-import { savesTable } from "./saves.js";
+} from "/assets/shared/js/components/ui.js";
+import { stackedBar, heatmap, barList } from "/assets/shared/js/components/charts.js";
+import { savesTable } from "/assets/admin/js/views/saves.js";
 
 const TABS = [
   { id: "saves", label: "Saves" },
@@ -213,6 +213,24 @@ function identityCard(user, ctx) {
         h("button", { class: "btn", text: "Back to users", onclick: () => navigate("/users") }),
         h("button", {
           class: "btn",
+          text: "Portal link",
+          title: "Create a short-lived link that signs this user in to their own portal",
+          onclick: async (event) => {
+            event.target.disabled = true;
+            try {
+              const link = await api.post(
+                `/admin/api/users/${encodeURIComponent(user.id)}/portal-link`,
+              );
+              portalLinkDialog(link);
+            } catch (error) {
+              toast(error.message, "critical");
+            } finally {
+              event.target.disabled = false;
+            }
+          },
+        }),
+        h("button", {
+          class: "btn",
           text: user.isBlocked ? "Unblock" : "Block",
           onclick: async () => {
             await api.post(`/admin/api/users/${encodeURIComponent(user.id)}/block`, {
@@ -307,16 +325,35 @@ async function tabContent(tab, { id, ctx, library }) {
       : emptyState("Nothing shared", "No shared backups or synced download sources.", "share");
   }
 
-  const activity = await api.get("/admin/api/activity", { userId: id, limit: 40 });
-  if (!activity.length) return emptyState("No activity recorded", null, "clock");
-  return simpleTable(
-    ["What", "Game", "Detail", "When"],
-    activity.map((entry) => [
-      h("span", { text: entry.kind }),
-      entry.game?.objectId ? gameCell(entry.game) : h("span", { class: "muted", text: "—" }),
-      h("span", { class: "muted small", text: entry.detail ?? "" }),
-      h("span", { class: "muted", title: fmt.dateTime(entry.at), text: fmt.relative(entry.at) }),
-    ]),
+  const activity = await api.get("/admin/api/events", { userId: id, perPage: 50 });
+  if (!activity.rows.length) return emptyState("No activity recorded", null, "clock");
+
+  return h(
+    "div",
+    {},
+    simpleTable(
+      ["What", "Game", "Size", "When"],
+      activity.rows.map((entry) => [
+        h(
+          "div",
+          { class: "stack" },
+          h("span", { text: entry.summary }),
+          h("span", { class: "mono muted small", text: entry.kind }),
+        ),
+        entry.game?.objectId ? gameCell(entry.game) : h("span", { class: "muted", text: "—" }),
+        h("span", { class: "num", text: entry.sizeBytes ? fmt.bytes(entry.sizeBytes) : "" }),
+        h("span", { class: "muted", title: fmt.dateTime(entry.at), text: fmt.relative(entry.at) }),
+      ]),
+    ),
+    h(
+      "div",
+      { class: "card-body tight" },
+      h("button", {
+        class: "btn small",
+        text: "Open in history",
+        onclick: () => navigate(`/events?userId=${encodeURIComponent(id)}`),
+      }),
+    ),
   );
 }
 
@@ -378,6 +415,41 @@ function dangerZone(user, ctx) {
         }),
       ),
     ),
+  });
+}
+
+/** Shows the minted link with a copy button — it is only useful if it can be
+ *  handed to someone before it expires. */
+function portalLinkDialog(link) {
+  const field = h("input", { class: "input", value: link.url, readonly: true, style: { width: "100%" } });
+
+  openModal({
+    title: "Portal sign-in link",
+    body: h(
+      "div",
+      { style: { display: "grid", gap: "10px" } },
+      h("p", {
+        style: { margin: 0 },
+        text: `Send this to the user. It signs them in to their own portal and expires in ${Math.round(link.expiresInSeconds / 60)} minutes.`,
+      }),
+      field,
+    ),
+    actions: (close) => [
+      h("button", { class: "btn", text: "Close", onclick: () => close() }),
+      h("button", {
+        class: "btn primary",
+        text: "Copy link",
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(link.url);
+            toast("Link copied", "good");
+          } catch (_) {
+            field.select();
+            toast("Select and copy the link", "critical");
+          }
+        },
+      }),
+    ],
   });
 }
 

@@ -828,3 +828,14 @@ table.sub td { padding: 7px 14px; border-top: 1px solid var(--border); }
 .checkline input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 .hero-figure { font-size: 34px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.1; }
+
+/* ----------------------------------------------------------------- portal */
+/* The player's view has no sidebar — one centred column, the same cards. */
+.portal-shell { max-width: 1080px; margin: 0 auto; padding: 0 16px 48px; }
+.portal-shell .topbar { padding: 0; }
+.portal-nav { display: flex; padding: 12px 0 0; overflow-x: auto; }
+.portal-nav .nav-item { width: auto; white-space: nowrap; }
+.portal-nav .nav-item[aria-current="page"] { background: var(--accent-weak); color: var(--text); }
+.portal-nav .nav-item[aria-current="page"] .icon { color: var(--accent); }
+.portal-nav .nav-item[aria-current="page"]::before { display: none; }
+.portal-shell .content { padding: 20px 0 0; }

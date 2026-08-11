@@ -295,6 +295,21 @@ pub async fn upload(
         let actual = hex::encode(digest.finalize());
         if !actual.eq_ignore_ascii_case(expected) {
             let _ = tokio::fs::remove_file(&temp_path).await;
+
+            /* Content-addressed storage rejecting its own bytes is either a
+               corrupted transfer or someone trying to poison a hash — either
+               way an operator wants to know it happened. */
+            crate::events::record(
+                &state,
+                crate::events::Event::system(
+                    "storage.hash_mismatch",
+                    "Upload rejected — bytes did not match the declared SHA-256",
+                )
+                .detail(serde_json::json!({ "key": claims.key, "expected": expected }))
+                .warning(),
+            )
+            .await;
+
             return Err(ApiError::bad_request(
                 "uploaded bytes do not match the declared SHA-256",
             ));
@@ -304,6 +319,7 @@ pub async fn upload(
     tokio::fs::rename(&temp_path, &path).await?;
 
     finalize_upload(&state, &claims.key, written).await?;
+    state.metrics.add_uploaded(written);
 
     tracing::info!("stored {} ({} bytes)", claims.key, written);
     Ok(StatusCode::OK)
@@ -387,6 +403,7 @@ pub async fn download(
     let length = file.metadata().await?.len();
 
     let stream = tokio_util::io::ReaderStream::new(file);
+    state.metrics.add_downloaded(length);
 
     let response = Response::builder()
         .status(StatusCode::OK)

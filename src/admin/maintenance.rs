@@ -7,6 +7,7 @@
 
 use super::AdminSession;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::{cloud_saves, games, storage};
 use axum::extract::{Path, State};
@@ -63,6 +64,12 @@ fn catalogue() -> Vec<Value> {
             "danger": false,
         }),
         json!({
+            "id": "prune-events",
+            "title": "Prune old history",
+            "description": "Delete recorded events past the retention window. The window is HYDRA_EVENT_RETENTION_DAYS; this runs daily on its own.",
+            "danger": false,
+        }),
+        json!({
             "id": "vacuum",
             "title": "Compact the database",
             "description": "Checkpoint the write-ahead log and VACUUM. Reclaims space after a large delete.",
@@ -106,6 +113,18 @@ async fn run(
             };
             json!({ "summary": format!("Dropped {cleared} cached token(s)."), "cleared": cleared })
         }
+        "prune-events" => {
+            let removed = crate::events::prune(&state, state.config.event_retention_days)
+                .await
+                .map_err(|err| ApiError::internal(err.to_string()))?;
+            json!({
+                "summary": match removed {
+                    0 => "Nothing past the retention window.".to_string(),
+                    n => format!("Pruned {n} event(s)."),
+                },
+                "pruned": removed,
+            })
+        }
         "vacuum" => vacuum(&state).await?,
         other => {
             return Err(ApiError::bad_request(format!(
@@ -115,6 +134,17 @@ async fn run(
     };
 
     tracing::info!("admin: ran maintenance action {action}");
+
+    crate::events::record(
+        &state,
+        Event::admin(
+            "admin.maintenance",
+            result["summary"].as_str().unwrap_or("Maintenance action run").to_string(),
+        )
+        .detail(json!({ "action": action, "result": result })),
+    )
+    .await;
+
     Ok(Json(json!({ "ok": true, "action": action, "result": result })))
 }
 

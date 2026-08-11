@@ -2,24 +2,32 @@ mod achievements;
 mod admin;
 mod artifacts;
 mod artwork;
+mod assets;
 mod auth;
+mod backup;
 mod cloud_saves;
 mod config;
 mod emulation;
 mod error;
+mod events;
 mod games;
 mod images;
 mod members;
+mod metrics;
 mod playtime;
+mod portal;
+mod ratelimit;
 mod settings;
 mod shares;
 mod sources;
 mod state;
 mod storage;
+mod webhooks;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
+use std::net::SocketAddr;
 use config::Config;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -82,9 +90,29 @@ async fn main() {
         token_cache: Arc::new(RwLock::new(HashMap::new())),
         settings: Arc::new(RwLock::new(runtime_settings)),
         started_at: chrono::Utc::now(),
+        metrics: Arc::new(metrics::Counters::default()),
+        login_guard: Arc::new(RwLock::new(Default::default())),
     };
 
-    let app = router(app_state.clone()).with_state(app_state);
+    /* Backups and event pruning run in-process: the premise of this server is
+       that it is one binary you start, not a binary plus a cron entry. */
+    backup::spawn_scheduler(app_state.clone());
+
+    events::record(
+        &app_state,
+        events::Event::system(
+            "system.started",
+            format!("Server started (v{})", env!("CARGO_PKG_VERSION")),
+        ),
+    )
+    .await;
+
+    let app = router(app_state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            count_request,
+        ))
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -93,7 +121,24 @@ async fn main() {
     tracing::info!("hydra-server listening on {bind} (public url: {public_url})");
     tracing::info!("point the launcher's self-hosted cloud setting at {public_url}");
 
-    axum::serve(listener, app).await.expect("server error");
+    /* ConnectInfo gives the login lockout a real client address to key on. */
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("server error");
+}
+
+/// Counts every response for `/metrics`.
+async fn count_request(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let response = next.run(request).await;
+    state.metrics.observe_status(response.status().as_u16());
+    response
 }
 
 fn router(_state: AppState) -> Router<AppState> {
@@ -216,9 +261,12 @@ fn router(_state: AppState) -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/capabilities", get(capabilities))
+        .route("/metrics", get(metrics::render))
         .merge(api_routes)
         .merge(storage_routes)
+        .merge(assets::router())
         .merge(admin::router())
+        .merge(portal::router())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
@@ -248,6 +296,7 @@ async fn capabilities() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "features": [
             "cloud-saves-v2",
+            "user-portal",
             "cloud-saves-legacy",
             "emulation-saves",
             "custom-artwork",

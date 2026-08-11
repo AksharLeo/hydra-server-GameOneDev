@@ -12,8 +12,8 @@
  *   can't be interrogated is just a picture.
  */
 
-import { h, s } from "../dom.js";
-import * as fmt from "../format.js";
+import { h, s } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
 
 /** The categorical slots, in assignment order. Never cycled: a ninth
  *  category folds into the eighth rather than repeating slot 1's hue, which

@@ -2,6 +2,7 @@
 
 use super::{banner_url, AdminSession, Paging};
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::{cloud_saves, storage};
 use axum::extract::{Path, Query, State};
@@ -18,6 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/api/users/{id}/library", get(library))
         .route("/admin/api/users/{id}/block", post(set_blocked))
         .route("/admin/api/users/{id}/purge", post(purge))
+        .route("/admin/api/users/{id}/portal-link", post(portal_link))
 }
 
 /// Stored bytes for the user aliased `u`, mirroring [`storage::used_bytes`] —
@@ -367,6 +369,17 @@ async fn set_blocked(
        block applies within seconds, not minutes. */
     state.token_cache.write().await.clear();
 
+    crate::events::record(
+        &state,
+        Event::admin(
+            if payload.blocked { "admin.user.blocked" } else { "admin.user.unblocked" },
+            if payload.blocked { "Blocked a user" } else { "Unblocked a user" },
+        )
+        .about(&id)
+        .warning(),
+    )
+    .await;
+
     Ok(Json(json!({ "ok": true, "isBlocked": payload.blocked })))
 }
 
@@ -463,6 +476,19 @@ async fn purge(
         before - after
     );
 
+    crate::events::record(
+        &state,
+        Event::admin(
+            "admin.user.purged",
+            format!("Purged {} for a user", purged.join(", ")),
+        )
+        .about(&id)
+        .detail(json!({ "categories": purged }))
+        .size(before - after)
+        .warning(),
+    )
+    .await;
+
     Ok(Json(json!({
         "ok": true,
         "purged": purged,
@@ -545,6 +571,44 @@ async fn purge_artwork(state: &AppState, user_id: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// POST /admin/api/users/{id}/portal-link — a short-lived URL that signs this
+/// user in to the portal.
+///
+/// The escape hatch for the person who can't sign in the normal way: a
+/// deployment whose official API has no password endpoint, or someone who
+/// simply can't get in. The link expires in minutes and grants nothing beyond
+/// that one account's own data.
+async fn portal_link(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let user: Option<(String, String)> =
+        sqlx::query_as("SELECT id, display_name FROM users WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (id, display_name) = user.ok_or_else(|| ApiError::not_found("user not found"))?;
+
+    let (token, ttl) = crate::portal::issue_link_token(&state, &id)?;
+
+    crate::events::record(
+        &state,
+        Event::admin(
+            "admin.user.portal_link",
+            format!("Created a portal sign-in link for {display_name}"),
+        )
+        .about(&id)
+        .detail(json!({ "expiresInSeconds": ttl })),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "url": format!("{}/portal/auth/{token}", state.config.public_url),
+        "expiresInSeconds": ttl,
+    })))
+}
+
 /// DELETE /admin/api/users/{id} — the account and everything it owns.
 async fn delete_user(
     State(state): State<AppState>,
@@ -617,6 +681,15 @@ async fn delete_user(
 
     state.token_cache.write().await.clear();
     tracing::info!("admin: deleted user {id} ({freed} bytes freed)");
+
+    crate::events::record(
+        &state,
+        Event::admin("admin.user.deleted", format!("Deleted the account {id}"))
+            .about(&id)
+            .size(freed)
+            .critical(),
+    )
+    .await;
 
     Ok(Json(json!({ "ok": true, "freedBytes": freed })))
 }

@@ -6,10 +6,10 @@
  * can show, the palette can find.
  */
 
-import { h, icon } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { navigate } from "../router.js";
+import { h, icon } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { navigate } from "/assets/shared/js/router.js";
 import { NAV } from "./shell.js";
 
 const STATIC_COMMANDS = [

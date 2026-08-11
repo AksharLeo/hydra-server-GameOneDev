@@ -1,5 +1,5 @@
-import { h } from "../dom.js";
-import { api } from "../api.js";
+import { h } from "/assets/shared/js/dom.js";
+import { api } from "/assets/shared/js/api.js";
 
 export default {
   title: "Sign in",

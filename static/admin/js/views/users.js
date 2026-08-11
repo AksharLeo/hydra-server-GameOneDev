@@ -1,11 +1,11 @@
 /** The user directory. */
 
-import { h } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { setQuery, navigate } from "../router.js";
-import { card, userCell, pill, meter, emptyState, toast } from "../components/ui.js";
-import { dataTable, toolbar, segmented } from "../components/table.js";
+import { h } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { setQuery, navigate } from "/assets/shared/js/router.js";
+import { card, userCell, pill, meter, emptyState, toast } from "/assets/shared/js/components/ui.js";
+import { dataTable, toolbar, segmented } from "/assets/shared/js/components/table.js";
 
 export default {
   title: "Users",

@@ -1,5 +1,6 @@
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::storage;
 use axum::extract::{Path, Query, State};
@@ -251,6 +252,27 @@ pub async fn commit(
     .await?;
 
     let row = fetch_save(&state, &user.0.id, &id).await?;
+
+    crate::events::record(
+        &state,
+        Event::sync(
+            "emulation_save.synced",
+            &user.0.id,
+            format!(
+                "Synced an emulation save ({} · {})",
+                row.get::<String, _>("emulator"),
+                row.get::<String, _>("platform")
+            ),
+        )
+        .detail(serde_json::json!({
+            "saveId": id,
+            "fileName": row.get::<Option<String>, _>("file_name"),
+            "replaced": old_rows.len(),
+        }))
+        .size(row.get::<i64, _>("artifact_length_in_bytes")),
+    )
+    .await;
+
     Ok(Json(save_from_row(&row)))
 }
 

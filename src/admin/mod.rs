@@ -15,6 +15,7 @@
 //! | module | area |
 //! | --- | --- |
 //! | [`session`] | login, logout, the cookie session every other route requires |
+//! | [`events`] | the searchable history of everything the server recorded |
 //! | [`assets`] | the panel's own HTML/CSS/JS, embedded in the binary |
 //! | [`overview`] | dashboard totals, alerts, activity feed, trends |
 //! | [`users`] | the user directory, per-user detail, blocking and data purges |
@@ -22,6 +23,8 @@
 //! | [`games`] | the same data pivoted by game rather than by user |
 //! | [`storage`] | what occupies disk, and whether disk and database agree |
 //! | [`maintenance`] | one-shot operations: sweeps, garbage collection, metadata refresh, export |
+//! | [`backups`] | database backups: take one, download it, prune the rest |
+//! | [`webhooks`] | outbound notifications for anything in the event log |
 //! | [`settings`] | the runtime settings the panel may change |
 //!
 //! The front end mirrors that split (`static/admin/js/views/*`), so a feature
@@ -32,6 +35,8 @@ use axum::Router;
 use sqlx::Row;
 
 mod assets;
+mod backups;
+mod events;
 mod games;
 mod maintenance;
 mod overview;
@@ -40,6 +45,7 @@ mod session;
 mod settings;
 mod storage;
 mod users;
+mod webhooks;
 
 pub use session::AdminSession;
 
@@ -48,11 +54,14 @@ pub fn router() -> Router<AppState> {
         .merge(assets::router())
         .merge(session::router())
         .merge(overview::router())
+        .merge(events::router())
         .merge(users::router())
         .merge(saves::router())
         .merge(games::router())
         .merge(storage::router())
         .merge(maintenance::router())
+        .merge(backups::router())
+        .merge(webhooks::router())
         .merge(settings::router())
 }
 

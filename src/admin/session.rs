@@ -5,12 +5,15 @@
 //! short-lived JWT in an HttpOnly cookie.
 
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
+use crate::ratelimit;
 use crate::state::AppState;
-use axum::extract::{FromRequestParts, State};
-use axum::http::{header, request::Parts};
+use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::http::{header, request::Parts, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use std::net::SocketAddr;
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -18,6 +21,8 @@ use serde_json::{json, Value};
 
 const SESSION_TTL_SECONDS: i64 = 60 * 60 * 12;
 const COOKIE_NAME: &str = "hydra_admin";
+/// Lockout bucket, kept separate from the portal's.
+const SCOPE: &str = "admin";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -90,6 +95,8 @@ struct LoginRequest {
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> ApiResult<Response> {
     if state.config.admin_password.is_empty() {
@@ -97,6 +104,11 @@ async fn login(
             "admin panel disabled — set HYDRA_ADMIN_PASSWORD",
         ));
     }
+
+    /* One shared password guards everything here, so an attacker with
+       unlimited guesses eventually wins. Lock the address out first. */
+    let ip = ratelimit::client_ip(&state, &headers, Some(peer));
+    ratelimit::check(&state, SCOPE, &ip).await?;
 
     /* constant-time-ish comparison to avoid trivially timing the password */
     let expected = state.config.admin_password.as_bytes();
@@ -109,8 +121,54 @@ async fn login(
             == 0;
 
     if !matches {
+        state
+            .metrics
+            .login_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let (failures, locked) = ratelimit::record_failure(&state, SCOPE, &ip).await;
+
+        crate::events::record(
+            &state,
+            Event::auth("auth.admin.failed", "Failed admin sign-in")
+                .actor("anonymous")
+                .ip(Some(ip.clone()))
+                .detail(json!({ "failures": failures, "lockedOut": locked.is_some() }))
+                .warning(),
+        )
+        .await;
+
+        if locked.is_some() {
+            crate::events::record(
+                &state,
+                Event::auth(
+                    "auth.admin.locked",
+                    format!("Admin sign-in locked out for {ip}"),
+                )
+                .actor("anonymous")
+                .ip(Some(ip.clone()))
+                .detail(json!({ "minutes": state.config.login_lockout_minutes }))
+                .critical(),
+            )
+            .await;
+
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many failed attempts — try again later",
+            ));
+        }
+
         return Err(ApiError::unauthorized("wrong password"));
     }
+
+    ratelimit::record_success(&state, SCOPE, &ip).await;
+    crate::events::record(
+        &state,
+        Event::auth("auth.admin.login", "Admin signed in")
+            .actor("admin")
+            .ip(Some(ip)),
+    )
+    .await;
 
     let expires_at = Utc::now().timestamp() + SESSION_TTL_SECONDS;
     let token = encode(

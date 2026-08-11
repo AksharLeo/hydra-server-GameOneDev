@@ -20,7 +20,9 @@ and download sources browsing all work exactly as before.
 | Download source list sync across devices | **this server** |
 | Profile banner image hosting | **this server** (URL saved to the official profile) |
 | Custom game images (covers, icons, logos, banners) | **this server** |
-| Admin panel (users, storage, quotas) | **this server** at `/admin` |
+| Admin panel (users, storage, history, quotas) | **this server** at `/admin` |
+| User portal — players see and manage their own saves | **this server** at `/portal` |
+| Event log, webhooks, Prometheus metrics, database backups | **this server** |
 
 ## How authentication works
 
@@ -66,20 +68,38 @@ subscription needed.
 | `HYDRA_MAX_BYTES_PER_USER` | `0` (unlimited) | Per-user storage quota in bytes — counts save backups, Cloud Save V2 blobs (once per distinct file), emulation saves and uploaded custom images |
 | `HYDRA_BACKUPS_PER_GAME_LIMIT` | `100` | Max save backups per game per user |
 | `HYDRA_ALLOWED_USERS` | *(empty = everyone)* | Comma-separated official user ids or usernames allowed to use this server |
+| `HYDRA_LOGIN_MAX_ATTEMPTS` | `8` | Failed sign-ins from one address before it is locked out |
+| `HYDRA_LOGIN_LOCKOUT_MINUTES` | `15` | How long a locked-out address stays locked |
+| `HYDRA_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` / `X-Real-IP` for the client address. **Only enable behind a proxy you control** — otherwise a client can spoof its address and walk past the lockout |
+| `HYDRA_PORTAL_ENABLED` | `true` | Serve the user portal at `/portal` |
+| `HYDRA_OFFICIAL_LOGIN_PATH` | `/auth/login` | Path on the official API the portal posts its sign-in form to |
+| `HYDRA_METRICS_ENABLED` | `true` | Serve Prometheus metrics at `/metrics` |
+| `HYDRA_METRICS_TOKEN` | *(empty = open)* | Bearer token required to scrape `/metrics` |
+| `HYDRA_BACKUP_INTERVAL_HOURS` | `24` | Hours between automatic database backups (`0` disables them) |
+| `HYDRA_BACKUP_KEEP` | `7` | Automatic backups kept before the oldest is pruned |
+| `HYDRA_EVENT_RETENTION_DAYS` | `90` | Days of history kept in the event log |
 
-The last three can also be edited live from the admin panel; values saved there
-are stored in the database and override the environment until reset.
+`HYDRA_MAX_BYTES_PER_USER`, `HYDRA_BACKUPS_PER_GAME_LIMIT` and
+`HYDRA_ALLOWED_USERS` can also be edited live from the admin panel; values saved
+there are stored in the database and override the environment until reset.
 
 ### Admin panel
 
 Open `https://your-server/admin` and sign in with `HYDRA_ADMIN_PASSWORD`. The
-panel is a full operations console for the server, in seven screens.
+panel is a full operations console for the server, in nine screens.
 
 **Overview** — headline totals (users, storage, cloud saves, backups), a
-30-day activity chart, a live feed of what launchers have been doing, the
+30-day activity chart, a live feed of what the server has been doing, the
 biggest users and games, and a year of playtime. Anything that needs a human
 gets an alert at the top with the screen that fixes it: uploads that never
 finished, saves whose bytes are missing, users sitting at their quota.
+
+**History** — the full event log, searchable and filterable by category
+(sync / admin / auth / system), severity, kind, user and date range. It records
+what the launchers did, every operator action, every sign-in and lockout, and
+every background job — including things whose rows are long gone, because a
+deleted save that leaves no trace is exactly the one you end up asking about.
+Rows expand to the event's own detail.
 
 **Users** — searchable, sortable directory with storage against quota. Each
 account opens onto its own screen: what it stores broken down by kind, the
@@ -107,11 +127,17 @@ reconciles both directions: rows whose bytes are gone (a restore would come
 back short) and files no row points at (space nothing will reclaim). It only
 reports — deleting is a separate, explicit step.
 
-**Maintenance** — the housekeeping the server otherwise only does lazily:
-sweep abandoned uploads, collect orphaned blobs, delete orphaned files,
-re-resolve missing game metadata, clear the token cache, compact the database.
-Each reports what it actually changed. There is also a JSON export of the
-whole inventory.
+**Maintenance** — database backups plus the housekeeping the server otherwise
+only does lazily: sweep abandoned uploads, collect orphaned blobs, delete
+orphaned files, re-resolve missing game metadata, prune old history, clear the
+token cache, compact the database. Each reports what it actually changed. There
+is also a JSON export of the whole inventory.
+
+**Webhooks** — send events anywhere that accepts a POST. Filter by event family
+and minimum severity, pick the payload shape (full JSON, or a rendered message
+for Discord/Slack), and set a secret to have each delivery signed. A test button
+sends one immediately and reports the status code; a hook that fails twenty
+times in a row switches itself off.
 
 **Settings** — per-user quota, backups-per-game limit and the allowed-users
 list, applied immediately and persisted. Each value shows all three layers:
@@ -121,6 +147,51 @@ Everywhere else: ⌘K (Ctrl-K) opens a command palette that jumps to any screen
 or searches users and games, and the panel follows your system light/dark
 theme with a toggle to override it.
 
+### User portal
+
+`https://your-server/portal` is the players' own view: what they have stored
+here, how much of their quota it uses, which machines they sync from, and their
+achievements, custom images, shares and playtime. They can download any save —
+including individual files out of a cloud save — and delete what they no longer
+want, without an operator in the loop.
+
+Signing in asks for the Hydra account they already have. The server forwards
+those credentials **once** to the official Hydra API (`HYDRA_OFFICIAL_LOGIN_PATH`,
+the same exchange the launcher's own sign-in performs), uses what comes back to
+confirm the identity against `/profile/me`, and then issues a session cookie of
+its own — the password is never stored, logged or kept in memory afterwards.
+Two fallbacks exist for deployments where that doesn't fit: pasting a launcher
+access token, and **portal links** an operator mints from a user's page in the
+admin panel, which sign that one account in for fifteen minutes.
+
+Set `HYDRA_PORTAL_ENABLED=false` to switch the whole thing off.
+
+### Monitoring
+
+`GET /metrics` exposes Prometheus metrics: users, stored bytes by kind, save
+counts, pending uploads, blob count, playtime, failing webhooks, events per
+category in the last hour, database size, free disk, request and byte counters.
+Nothing personal — counts and totals only. Set `HYDRA_METRICS_TOKEN` to require
+a bearer token, or `HYDRA_METRICS_ENABLED=false` to remove the endpoint.
+
+### Backups
+
+The stored save files are content-addressed and easy to copy with any tool; the
+database is the part that maps them back to games and users, so it is backed up
+on its own schedule with SQLite's `VACUUM INTO` (a consistent copy of a live
+database, no writer blocking). Backups land in `<data dir>/backups`, the oldest
+beyond `HYDRA_BACKUP_KEEP` are pruned, and the panel can take one on demand or
+hand you the file. Restoring is a file copy: stop the server, put the backup
+where `hydra-server.db` was, start it.
+
+### Sign-in protection
+
+Both password forms — the admin panel and the portal — lock an address out
+after `HYDRA_LOGIN_MAX_ATTEMPTS` failures within fifteen minutes, and every
+failure and lockout is recorded in the event log. Behind a reverse proxy, set
+`HYDRA_TRUST_PROXY_HEADERS=true` so the lockout keys on the real client address
+rather than the proxy's.
+
 #### Extending the panel
 
 The panel is deliberately modular, one module per screen:
@@ -128,14 +199,19 @@ The panel is deliberately modular, one module per screen:
 | Layer | Where |
 | --- | --- |
 | API routes | `src/admin/<area>.rs`, merged in `src/admin/mod.rs` |
-| Screen | `static/admin/js/views/<area>.js`, routed in `js/main.js` |
-| Navigation | the `NAV` table in `js/components/shell.js` |
-| Shared UI | `js/components/` — tables, charts, dialogs, toasts, palette |
+| Screen | `static/admin/js/views/<area>.js`, routed in `static/admin/js/main.js` |
+| Navigation | the `NAV` table in `static/admin/js/components/shell.js` |
+| Shared UI | `static/shared/js/` — design system, tables, charts, dialogs, toasts |
+| Portal | `src/portal/` and `static/portal/`, over the same shared UI |
 
-A new screen is a new module, a new view file and one line in each of the
-three registries; nothing else needs to change. The front end is embedded in
-the binary (`src/admin/assets.rs`), so there is still only one artifact to
-deploy — add a file there when you add one to `static/admin/`.
+A new screen is a new module, a new view file and one line in each of the three
+registries; nothing else needs to change. Both front ends are embedded in the
+binary and served from one place (`src/assets.rs`), so there is still a single
+artifact to deploy — add a row there when you add a file under `static/`.
+
+To record something new in the log, build an `events::Event` and hand it to
+`events::record`; the History screen, the audit trail and every webhook pick it
+up with no further wiring.
 
 ## API surface
 
@@ -165,6 +241,7 @@ Implements the endpoints the launcher routes to a self-hosted cloud server:
   (signed, short-lived, streamed to/from disk)
 - `GET /health`
 - `GET /capabilities` — version and feature list (see below)
+- `GET /metrics` — Prometheus metrics (see Monitoring)
 
 ### Cloud Save V2
 

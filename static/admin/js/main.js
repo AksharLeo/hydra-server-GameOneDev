@@ -6,26 +6,29 @@
  * one line here — nothing else in the panel needs to know about it.
  */
 
-import { api, events } from "./api.js";
-import { register, current, start, navigate } from "./router.js";
-import { createShell } from "./components/shell.js";
-import { openPalette } from "./components/palette.js";
-import { overview as loadOverview, invalidate } from "./store.js";
-import { toast, skeleton } from "./components/ui.js";
-import { h } from "./dom.js";
-import { hideTip } from "./components/charts.js";
+import { api, events } from "/assets/shared/js/api.js";
+import { register, current, start, navigate } from "/assets/shared/js/router.js";
+import { createShell } from "/assets/admin/js/components/shell.js";
+import { openPalette } from "/assets/admin/js/components/palette.js";
+import { overview as loadOverview, invalidate } from "/assets/admin/js/store.js";
+import { toast, skeleton } from "/assets/shared/js/components/ui.js";
+import { h } from "/assets/shared/js/dom.js";
+import { hideTip } from "/assets/shared/js/components/charts.js";
 
-import login from "./views/login.js";
-import overview from "./views/overview.js";
-import users from "./views/users.js";
-import user from "./views/user.js";
-import saves from "./views/saves.js";
-import games from "./views/games.js";
-import storage from "./views/storage.js";
-import maintenance from "./views/maintenance.js";
-import settings from "./views/settings.js";
+import login from "/assets/admin/js/views/login.js";
+import overview from "/assets/admin/js/views/overview.js";
+import eventsView from "/assets/admin/js/views/events.js";
+import users from "/assets/admin/js/views/users.js";
+import user from "/assets/admin/js/views/user.js";
+import saves from "/assets/admin/js/views/saves.js";
+import games from "/assets/admin/js/views/games.js";
+import storage from "/assets/admin/js/views/storage.js";
+import maintenance from "/assets/admin/js/views/maintenance.js";
+import webhooks from "/assets/admin/js/views/webhooks.js";
+import settings from "/assets/admin/js/views/settings.js";
 
 register("/", overview);
+register("/events", eventsView);
 register("/users", users);
 register("/users/:id", user);
 register("/saves", saves);
@@ -33,6 +36,7 @@ register("/games", games);
 register("/games/:shop/:objectId", games.detail);
 register("/storage", storage);
 register("/maintenance", maintenance);
+register("/webhooks", webhooks);
 register("/settings", settings);
 
 const app = document.getElementById("app");

@@ -1,9 +1,9 @@
 /** The library, pivoted by game instead of by user. */
 
-import { h } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { setQuery, navigate } from "../router.js";
+import { h } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { setQuery, navigate } from "/assets/shared/js/router.js";
 import {
   card,
   statTile,
@@ -13,9 +13,9 @@ import {
   pill,
   emptyState,
   toast,
-} from "../components/ui.js";
-import { dataTable, toolbar } from "../components/table.js";
-import { savesTable } from "./saves.js";
+} from "/assets/shared/js/components/ui.js";
+import { dataTable, toolbar } from "/assets/shared/js/components/table.js";
+import { savesTable } from "/assets/admin/js/views/saves.js";
 
 const games = {
   title: "Games",

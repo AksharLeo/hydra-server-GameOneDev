@@ -6,8 +6,8 @@
  * calls it a sort of 4000.
  */
 
-import { h, icon } from "../dom.js";
-import * as fmt from "../format.js";
+import { h, icon } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
 import { emptyState } from "./ui.js";
 
 /**

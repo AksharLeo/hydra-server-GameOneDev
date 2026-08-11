@@ -15,7 +15,6 @@ use sqlx::Row;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/api/overview", get(overview))
-        .route("/admin/api/activity", get(activity))
         .route("/admin/api/trends", get(trends))
         .route("/admin/api/playtime", get(playtime_heatmap))
 }
@@ -310,89 +309,6 @@ pub(crate) fn storage_breakdown(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ActivityQuery {
-    #[serde(default)]
-    limit: Option<i64>,
-    #[serde(default)]
-    user_id: Option<String>,
-}
-
-/// GET /admin/api/activity — one timeline across every table that records
-/// when something happened, newest first.
-///
-/// There is no event log to read: each row's own timestamp *is* the event, so
-/// the feed is a union of "the last thing that touched this row".
-async fn activity(
-    State(state): State<AppState>,
-    _admin: AdminSession,
-    Query(query): Query<ActivityQuery>,
-) -> ApiResult<Json<Value>> {
-    let limit = query.limit.unwrap_or(25).clamp(1, 200);
-
-    let sql = format!(
-        "SELECT e.*, u.display_name, u.username, u.profile_image_url,
-                g.name AS game_name, g.cover_url AS game_cover_url
-         FROM ({UNION}) e
-         LEFT JOIN users u ON u.id = e.user_id
-         LEFT JOIN game_metadata g ON g.shop = e.shop AND g.object_id = e.object_id
-         WHERE (?1 IS NULL OR e.user_id = ?1)
-         ORDER BY e.at DESC LIMIT ?2",
-        UNION = ACTIVITY_UNION
-    );
-
-    let rows = sqlx::query(&sql)
-        .bind(&query.user_id)
-        .bind(limit)
-        .fetch_all(&state.pool)
-        .await?;
-
-    Ok(Json(json!(rows
-        .iter()
-        .map(|row| json!({
-            "kind": row.get::<String, _>("kind"),
-            "at": row.get::<String, _>("at"),
-            "refId": row.get::<Option<String>, _>("ref_id"),
-            "detail": row.get::<Option<String>, _>("detail"),
-            "sizeBytes": row.get::<Option<i64>, _>("size_bytes"),
-            "user": super::user_ref(row),
-            "game": super::game_ref(row),
-        }))
-        .collect::<Vec<_>>())))
-}
-
-/// Every row that carries a timestamp, normalised to one shape.
-const ACTIVITY_UNION: &str = "
-    SELECT 'cloudSave' AS kind, s.updated_at AS at, s.user_id, s.shop, s.object_id,
-           s.id AS ref_id, 'v' || s.version || ' · ' || s.file_count || ' files' AS detail,
-           s.total_size_in_bytes AS size_bytes
-      FROM cloud_save_snapshots s WHERE s.status = 'committed'
-    UNION ALL
-    SELECT 'backup', a.created_at, a.user_id, a.shop, a.object_id, a.id,
-           COALESCE(a.label, a.hostname), a.artifact_length_in_bytes
-      FROM artifacts a
-    UNION ALL
-    SELECT 'emulationSave', e.updated_at, e.user_id, e.shop, e.object_id, e.id,
-           e.emulator || ' · ' || e.platform, e.artifact_length_in_bytes
-      FROM emulation_saves e
-    UNION ALL
-    SELECT 'achievements', ga.updated_at, ga.user_id, ga.shop, ga.object_id, ga.remote_game_id,
-           json_array_length(ga.achievements) || ' achievements', NULL
-      FROM game_achievements ga
-    UNION ALL
-    SELECT 'artwork', w.updated_at, w.user_id, w.shop, w.object_id, w.kind,
-           w.kind || ' · ' || w.source, w.size_in_bytes
-      FROM game_artwork w
-    UNION ALL
-    SELECT 'share', sh.created_at, sh.owner_user_id, NULL, NULL, sh.id,
-           'shared with ' || sh.recipient_user_id, NULL
-      FROM artifact_shares sh
-    UNION ALL
-    SELECT 'signup', u.created_at, u.id, NULL, NULL, u.id, NULL, NULL
-      FROM users u
-";
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct TrendsQuery {
     #[serde(default)]
     days: Option<i64>,
@@ -412,13 +328,13 @@ async fn trends(
 
     /* substr(at, 1, 10) turns an RFC3339 timestamp into its calendar day
        without pulling every row into memory to parse it. */
-    let rows = sqlx::query(&format!(
-        "SELECT substr(e.at, 1, 10) AS day, e.kind, COUNT(*) AS events,
-                COALESCE(SUM(e.size_bytes), 0) AS bytes
-         FROM ({ACTIVITY_UNION}) e
-         WHERE substr(e.at, 1, 10) >= ?
-         GROUP BY day, e.kind ORDER BY day ASC"
-    ))
+    let rows = sqlx::query(
+        "SELECT substr(at, 1, 10) AS day, category, COUNT(*) AS events,
+                COALESCE(SUM(size_bytes), 0) AS bytes
+         FROM events
+         WHERE substr(at, 1, 10) >= ?
+         GROUP BY day, category ORDER BY day ASC",
+    )
     .bind(&since)
     .fetch_all(&state.pool)
     .await?;
@@ -427,9 +343,9 @@ async fn trends(
         Default::default();
     for row in &rows {
         let day: String = row.get("day");
-        let kind: String = row.get("kind");
+        let category: String = row.get("category");
         let entry = by_day.entry(day).or_default();
-        entry.insert(kind, json!(row.get::<i64, _>("events")));
+        entry.insert(category, json!(row.get::<i64, _>("events")));
         let bytes: i64 = row.get("bytes");
         let total = entry
             .get("bytes")

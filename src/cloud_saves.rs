@@ -19,6 +19,7 @@
 
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::storage;
 use axum::extract::{Query, State};
@@ -284,6 +285,25 @@ pub async fn prepare_snapshot(
 
     let current_version = current.as_ref().map(|(_, version)| *version).unwrap_or(0);
     if payload.base_version != current_version {
+        /* Worth logging: a conflict is the visible half of "my save went
+           backwards on the other machine", and the panel can show it. */
+        crate::events::record(
+            &state,
+            Event::sync(
+                "cloud_save.conflict",
+                user_id,
+                "Upload refused — the cloud save had already moved on",
+            )
+            .game(&payload.shop, &payload.object_id)
+            .detail(serde_json::json!({
+                "baseVersion": payload.base_version,
+                "currentVersion": current_version,
+                "hostname": payload.hostname,
+            }))
+            .warning(),
+        )
+        .await;
+
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "cloud save has changed on another device — sync again before uploading",
@@ -538,6 +558,25 @@ pub async fn commit_snapshot(
         "cloud save v2: committed {shop}:{object_id} v{version} ({file_count} files) for {user_id}"
     );
 
+    crate::events::record(
+        &state,
+        Event::sync(
+            "cloud_save.committed",
+            user_id,
+            format!("Synced a cloud save (v{version}, {file_count} files)"),
+        )
+        .game(&shop, &object_id)
+        .detail(serde_json::json!({
+            "snapshotId": payload.pending_snapshot_id,
+            "version": version,
+            "fileCount": file_count,
+            "hostname": snapshot.get::<Option<String>, _>("hostname"),
+            "platform": snapshot.get::<Option<String>, _>("platform"),
+        }))
+        .size(total_size),
+    )
+    .await;
+
     Ok(Json(CommitSnapshotResponse {
         snapshot_id: payload.pending_snapshot_id,
         version,
@@ -628,6 +667,14 @@ pub async fn delete_snapshots(
         query.shop,
         query.object_id
     );
+
+    crate::events::record(
+        &state,
+        Event::sync("cloud_save.deleted", user_id, "Deleted a cloud save from the launcher")
+            .game(&query.shop, &query.object_id)
+            .detail(serde_json::json!({ "snapshots": ids.len() })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -763,6 +810,18 @@ async fn enforce_quota(
 
     let used = storage::used_bytes(state, user_id).await?;
     if used + incoming_bytes > max_bytes_per_user as i64 {
+        crate::events::record(
+            state,
+            Event::sync("cloud_save.quota_exceeded", user_id, "Upload refused — quota full")
+                .detail(serde_json::json!({
+                    "usedBytes": used,
+                    "incomingBytes": incoming_bytes,
+                    "quotaBytes": max_bytes_per_user,
+                }))
+                .warning(),
+        )
+        .await;
+
         return Err(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "storage quota exceeded — free up space or ask the server admin",
@@ -838,6 +897,16 @@ pub async fn collect_orphan_blobs(state: &AppState, user_id: &str) -> ApiResult<
             "cloud save v2: freed {} orphaned blob(s) for {user_id}",
             orphans.len()
         );
+        crate::events::record(
+            state,
+            Event::system(
+                "system.gc",
+                format!("Freed {} orphaned blob(s)", orphans.len()),
+            )
+            .about(user_id)
+            .detail(serde_json::json!({ "blobs": orphans.len() })),
+        )
+        .await;
     }
 
     Ok(())

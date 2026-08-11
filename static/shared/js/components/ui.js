@@ -1,8 +1,8 @@
 /** Shared pieces of chrome: tiles, identities, pills, overlays, toasts. */
 
-import { h, icon, frag, initials } from "../dom.js";
-import * as fmt from "../format.js";
-import { navigate } from "../router.js";
+import { h, icon, frag, initials } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { navigate } from "/assets/shared/js/router.js";
 
 // ------------------------------------------------------------------ layout
 

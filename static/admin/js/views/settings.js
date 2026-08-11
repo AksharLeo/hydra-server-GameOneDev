@@ -1,9 +1,9 @@
 /** Runtime settings: environment default, saved override, value in force. */
 
-import { h } from "../dom.js";
-import * as fmt from "../format.js";
-import { api } from "../api.js";
-import { card, pill, confirm, toast } from "../components/ui.js";
+import { h } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api } from "/assets/shared/js/api.js";
+import { card, pill, confirm, toast } from "/assets/shared/js/components/ui.js";
 
 const GIB = 2 ** 30;
 

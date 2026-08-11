@@ -8,6 +8,7 @@
 
 use super::{AdminSession, Paging};
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::{cloud_saves, storage};
 use axum::extract::{Path, Query, State};
@@ -384,6 +385,17 @@ async fn delete_snapshot(
     cloud_saves::collect_orphan_blobs(&state, &owner).await?;
 
     let after = storage::used_bytes(&state, &owner).await?;
+
+    crate::events::record(
+        &state,
+        Event::admin("admin.save.deleted", "Deleted a cloud save")
+            .about(&owner)
+            .detail(json!({ "snapshotId": id }))
+            .size(before - after)
+            .warning(),
+    )
+    .await;
+
     Ok(Json(json!({ "ok": true, "freedBytes": before - after })))
 }
 
@@ -416,6 +428,15 @@ async fn delete_artifact(
         .execute(&state.pool)
         .await?;
     storage::delete_object(&state, &format!("artifacts/{id}.tar")).await;
+
+    crate::events::record(
+        &state,
+        Event::admin("admin.save.deleted", "Deleted a save backup")
+            .detail(json!({ "artifactId": id }))
+            .size(size)
+            .warning(),
+    )
+    .await;
 
     Ok(Json(json!({ "ok": true, "freedBytes": size })))
 }
@@ -461,6 +482,20 @@ async fn set_frozen(
         return Err(ApiError::not_found("backup not found"));
     }
 
+    crate::events::record(
+        &state,
+        Event::admin(
+            if payload.frozen { "admin.save.frozen" } else { "admin.save.unfrozen" },
+            if payload.frozen {
+                "Froze a backup so the launcher can't rotate it away"
+            } else {
+                "Unfroze a backup"
+            },
+        )
+        .detail(json!({ "artifactId": id })),
+    )
+    .await;
+
     Ok(Json(json!({ "ok": true, "isFrozen": payload.frozen })))
 }
 
@@ -485,6 +520,15 @@ async fn delete_emulation_save(
         .execute(&state.pool)
         .await?;
     storage::delete_object(&state, &format!("emulation-saves/{id}.bin")).await;
+
+    crate::events::record(
+        &state,
+        Event::admin("admin.save.deleted", "Deleted an emulation save")
+            .detail(json!({ "saveId": id }))
+            .size(size)
+            .warning(),
+    )
+    .await;
 
     Ok(Json(json!({ "ok": true, "freedBytes": size })))
 }

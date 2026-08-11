@@ -3,7 +3,7 @@
  * sidebar counts so every navigation doesn't re-query the server.
  */
 
-import { api } from "./api.js";
+import { api } from "/assets/shared/js/api.js";
 
 const THEME_KEY = "hydra-admin-theme";
 

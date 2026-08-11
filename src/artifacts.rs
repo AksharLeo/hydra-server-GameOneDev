@@ -1,5 +1,6 @@
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
+use crate::events::Event;
 use crate::state::AppState;
 use crate::storage;
 use axum::extract::{Path, Query, State};
@@ -152,6 +153,22 @@ pub async fn create(
         &artifact_key(&id),
         payload.artifact_length_in_bytes as u64,
     );
+
+    crate::events::record(
+        &state,
+        Event::sync(
+            "backup.created",
+            &user.0.id,
+            match payload.label.as_deref() {
+                Some(label) => format!("Uploaded a save backup — {label}"),
+                None => "Uploaded a save backup".to_string(),
+            },
+        )
+        .game(&payload.shop, &payload.object_id)
+        .detail(json!({ "artifactId": id, "hostname": payload.hostname }))
+        .size(payload.artifact_length_in_bytes),
+    )
+    .await;
 
     Ok(Json(json!({ "id": id, "uploadUrl": upload_url })))
 }

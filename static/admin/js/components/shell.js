@@ -1,11 +1,11 @@
 /** The frame every screen renders inside: sidebar, top bar, content area. */
 
-import { h, icon, fill } from "../dom.js";
-import * as fmt from "../format.js";
-import { navigate } from "../router.js";
-import { theme, toggleTheme } from "../store.js";
-import { api } from "../api.js";
-import { toast } from "./ui.js";
+import { h, icon, fill } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { navigate } from "/assets/shared/js/router.js";
+import { theme, toggleTheme } from "/assets/admin/js/store.js";
+import { api } from "/assets/shared/js/api.js";
+import { toast } from "/assets/shared/js/components/ui.js";
 
 /** Adding a screen: one entry here, one route in main.js, one view file. */
 export const NAV = [
@@ -15,10 +15,12 @@ export const NAV = [
     { route: "/saves", label: "Saves", icon: "saves", count: (data) =>
         (data?.cloudSaves?.committed ?? 0) + (data?.backups?.total ?? 0) + (data?.emulationSaves?.total ?? 0) },
     { route: "/games", label: "Games", icon: "games", count: (data) => data?.library?.games },
+    { route: "/events", label: "History", icon: "clock" },
   ] },
   { group: "Operate", items: [
     { route: "/storage", label: "Storage", icon: "storage" },
     { route: "/maintenance", label: "Maintenance", icon: "tools" },
+    { route: "/webhooks", label: "Webhooks", icon: "share" },
     { route: "/settings", label: "Settings", icon: "settings" },
   ] },
 ];

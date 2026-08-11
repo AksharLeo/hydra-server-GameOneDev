@@ -5,10 +5,10 @@
  * with the same actions, scoped to one owner — an operator learns it once.
  */
 
-import { h, icon } from "../dom.js";
-import * as fmt from "../format.js";
-import { api, download } from "../api.js";
-import { setQuery } from "../router.js";
+import { h, icon } from "/assets/shared/js/dom.js";
+import * as fmt from "/assets/shared/js/format.js";
+import { api, download } from "/assets/shared/js/api.js";
+import { setQuery } from "/assets/shared/js/router.js";
 import {
   card,
   userCell,
@@ -20,8 +20,8 @@ import {
   confirm,
   toast,
   openDrawer,
-} from "../components/ui.js";
-import { dataTable, toolbar, segmented } from "../components/table.js";
+} from "/assets/shared/js/components/ui.js";
+import { dataTable, toolbar, segmented } from "/assets/shared/js/components/table.js";
 
 export default {
   title: "Saves",
