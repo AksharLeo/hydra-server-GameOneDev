@@ -127,11 +127,13 @@ reconciles both directions: rows whose bytes are gone (a restore would come
 back short) and files no row points at (space nothing will reclaim). It only
 reports — deleting is a separate, explicit step.
 
-**Maintenance** — database backups plus the housekeeping the server otherwise
-only does lazily: sweep abandoned uploads, collect orphaned blobs, delete
-orphaned files, re-resolve missing game metadata, prune old history, clear the
-token cache, compact the database. Each reports what it actually changed. There
-is also a JSON export of the whole inventory.
+**Maintenance** — database backups (take one, download it, upload one taken
+elsewhere, restore from any of them — see [Backups](#backups)) plus the
+housekeeping the server otherwise only does lazily: sweep abandoned uploads,
+collect orphaned blobs, delete orphaned files, re-resolve missing game
+metadata, prune old history, clear the token cache, compact the database. Each
+reports what it actually changed. There is also a JSON export of the whole
+inventory.
 
 **Webhooks** — send events anywhere that accepts a POST. Filter by event family
 and minimum severity, pick the payload shape (full JSON, or a rendered message
@@ -181,8 +183,33 @@ database is the part that maps them back to games and users, so it is backed up
 on its own schedule with SQLite's `VACUUM INTO` (a consistent copy of a live
 database, no writer blocking). Backups land in `<data dir>/backups`, the oldest
 beyond `HYDRA_BACKUP_KEEP` are pruned, and the panel can take one on demand or
-hand you the file. Restoring is a file copy: stop the server, put the backup
-where `hydra-server.db` was, start it.
+hand you the file.
+
+**Restoring** happens from the panel too — *Maintenance → Database backups →
+Restore*, which asks you to type `restore` first. The server does not swap the
+file underneath itself (the pool has open connections and SQLite is mid-WAL);
+it attaches the backup and replaces every table's rows inside one transaction,
+so readers see the old database or the new one and nothing in between. No
+restart, and the panel session survives it.
+
+Three things worth knowing:
+
+- **It is reversible.** A backup of the current database is taken first and
+  named in the report, so restoring the wrong file costs one more click. That
+  file is exempt from pruning for the run, so it can never delete the backup
+  you are restoring from.
+- **Save files on disk are untouched.** Rows from an older database can point
+  at bytes that were already collected, and files uploaded since belong to no
+  row — run *Storage → Integrity* afterwards, which reports both directions.
+- **The schema has to match.** A backup taken before a migration is refused
+  rather than restored into the wrong columns. Those still restore the old way:
+  stop the server, put the file where `hydra-server.db` was, start it, and the
+  migrations run against it.
+
+*Upload backup* takes a file back the other way — a `.db` from this server that
+lives somewhere else now — verifies it is a real, matching database, and puts
+it in the backup directory ready to restore. Both the restore and the upload
+are recorded in the event log, the restore at critical severity.
 
 ### Sign-in protection
 

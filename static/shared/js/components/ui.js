@@ -250,31 +250,70 @@ export function openModal({ title, body, actions, onDismiss }) {
   return close;
 }
 
-/** Yes/no, resolving false for every way of backing out. */
-export function confirm({ title, body, confirmLabel = "Confirm", danger = false }) {
+/**
+ * Yes/no, resolving false for every way of backing out.
+ *
+ * `requireText` adds a field that must be typed exactly before the action
+ * unlocks — for the handful of operations that can't be undone by clicking
+ * again.
+ */
+export function confirm({ title, body, confirmLabel = "Confirm", danger = false, requireText }) {
   return new Promise((resolve) => {
+    const go = h("button", {
+      class: `btn ${danger ? "danger" : "primary"}`,
+      text: confirmLabel,
+      disabled: Boolean(requireText),
+    });
+
+    const typed = requireText
+      ? h("input", {
+          class: "input",
+          placeholder: requireText,
+          "aria-label": `Type ${requireText} to confirm`,
+          oninput: (event) => {
+            go.disabled = event.target.value.trim() !== requireText;
+          },
+          onkeydown: (event) => {
+            /* The field has the focus when the modal opens, so Enter should
+               mean what the button means. */
+            if (event.key === "Enter" && !go.disabled) go.click();
+          },
+        })
+      : null;
+
     openModal({
       title,
-      body: typeof body === "string" ? h("p", { style: { margin: 0 }, text: body }) : body,
+      body: h(
+        "div",
+        { style: { display: "grid", gap: "10px" } },
+        typeof body === "string" ? h("p", { style: { margin: 0 }, text: body }) : body,
+        requireText
+          ? h(
+              "div",
+              { class: "field" },
+              h("label", { text: `Type “${requireText}” to confirm` }),
+              typed,
+            )
+          : null,
+      ),
       onDismiss: () => resolve(false),
-      actions: (close) => [
-        h("button", {
-          class: "btn",
-          text: "Cancel",
-          onclick: () => {
-            close();
-            resolve(false);
-          },
-        }),
-        h("button", {
-          class: `btn ${danger ? "danger" : "primary"}`,
-          text: confirmLabel,
-          onclick: () => {
-            close();
-            resolve(true);
-          },
-        }),
-      ],
+      actions: (close) => {
+        go.addEventListener("click", () => {
+          close();
+          resolve(true);
+        });
+        return [
+          h("button", {
+            class: "btn",
+            text: "Cancel",
+            onclick: () => {
+              close();
+              resolve(false);
+            },
+          }),
+          go,
+        ];
+      },
     });
   });
 }

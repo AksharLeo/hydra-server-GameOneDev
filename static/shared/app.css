@@ -304,6 +304,10 @@ a:hover { text-decoration: underline; }
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+  /* A head with a title, a subtitle and two buttons runs out of room on a
+     phone; the actions drop to their own line rather than push the page
+     sideways. */
+  flex-wrap: wrap;
 }
 
 .card-head h2 { font-size: 13.5px; margin: 0; font-weight: 620; }

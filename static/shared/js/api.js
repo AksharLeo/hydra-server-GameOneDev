@@ -28,14 +28,14 @@ function url(path, query) {
   return search ? `${path}?${search}` : path;
 }
 
-async function request(path, { method = "GET", body, query, signal } = {}) {
+async function request(path, { method = "GET", body, raw, query, signal } = {}) {
   let response;
   try {
     response = await fetch(url(path, query), {
       method,
       signal,
       headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      body: raw ?? (body ? JSON.stringify(body) : undefined),
     });
   } catch (error) {
     if (error.name === "AbortError") throw error;
@@ -62,6 +62,17 @@ export const api = {
   put: (path, body) => request(path, { method: "PUT", body }),
   del: (path) => request(path, { method: "DELETE" }),
 };
+
+/**
+ * Sends a file as the whole request body.
+ *
+ * Not multipart: the endpoints that take a file take exactly one, and the
+ * bytes arriving unwrapped means a 2 GB database doesn't have to be
+ * base64'd or re-assembled on the far side.
+ */
+export function upload(path, file) {
+  return request(path, { method: "POST", raw: file });
+}
 
 /**
  * Opens a signed download in a new tab. Downloads are redirects to a
