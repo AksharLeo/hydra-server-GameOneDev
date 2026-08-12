@@ -365,7 +365,7 @@ non-Steam games and for older clients.
 `GET /capabilities` (unauthenticated) reports what this build supports:
 
 ```json
-{ "name": "hydra-server", "version": "4.1.0", "features": ["cloud-saves-v2", "..."] }
+{ "name": "hydra-server", "version": "4.1.1", "features": ["cloud-saves-v2", "..."] }
 ```
 
 The launcher checks this before enabling a feature whose endpoints might not
