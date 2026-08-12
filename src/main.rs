@@ -17,6 +17,7 @@ mod members;
 mod metrics;
 mod playtime;
 mod portal;
+mod presence;
 mod ratelimit;
 mod settings;
 mod shares;
@@ -93,6 +94,7 @@ async fn main() {
         started_at: chrono::Utc::now(),
         metrics: Arc::new(metrics::Counters::default()),
         login_guard: Arc::new(RwLock::new(Default::default())),
+        presence: Arc::new(RwLock::new(Default::default())),
     };
 
     /* Backups and event pruning run in-process: the premise of this server is

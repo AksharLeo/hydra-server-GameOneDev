@@ -179,6 +179,116 @@ export function toolbar({ search, onSearch, placeholder = "Search…", children 
   );
 }
 
+// ---------------------------------------------------------------- columns
+
+/**
+ * Which columns a screen shows, remembered per browser.
+ *
+ * A stored list is the operator's explicit choice and is taken literally;
+ * nothing stored means the column's own `default` applies. Storing the
+ * *visible* keys rather than the hidden ones is what lets a column ship
+ * switched off and still be turned on — the two are indistinguishable if you
+ * only record what was removed.
+ */
+const COLUMN_STORE = "hydra.columns.";
+
+function storedColumns(id) {
+  try {
+    const raw = localStorage.getItem(COLUMN_STORE + id);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The columns to render, in the order the caller declared them. */
+export function chooseColumns(id, columns) {
+  const stored = storedColumns(id);
+  return columns.filter((column) =>
+    column.fixed || (stored ? stored.includes(column.key) : column.default !== false),
+  );
+}
+
+const columnTitle = (column) => column.title ?? column.label ?? column.key;
+
+/**
+ * The control that changes the above: a checklist of every column the screen
+ * knows how to draw.
+ */
+export function columnMenu({ id, columns, onChange }) {
+  const visible = new Set(chooseColumns(id, columns).map((column) => column.key));
+
+  const save = () => {
+    localStorage.setItem(COLUMN_STORE + id, JSON.stringify([...visible]));
+    onChange();
+  };
+
+  const panel = h(
+    "div",
+    { class: "menu", hidden: true, role: "group", "aria-label": "Columns" },
+    ...columns.map((column) =>
+      h(
+        "label",
+        { class: "menu-item" },
+        h("input", {
+          type: "checkbox",
+          checked: column.fixed || visible.has(column.key),
+          /* A screen has to keep something to identify a row by, so its
+             anchor columns are shown as chosen and can't be unchosen. */
+          disabled: Boolean(column.fixed),
+          onchange: (event) => {
+            if (event.target.checked) visible.add(column.key);
+            else visible.delete(column.key);
+            save();
+          },
+        }),
+        h("span", { text: columnTitle(column) }),
+        column.fixed ? h("span", { class: "muted small", text: "always" }) : null,
+      ),
+    ),
+    h("div", { class: "menu-sep" }),
+    h("button", {
+      class: "btn small ghost",
+      text: "Reset to defaults",
+      onclick: () => {
+        localStorage.removeItem(COLUMN_STORE + id);
+        onChange();
+      },
+    }),
+  );
+
+  const button = h(
+    "button",
+    {
+      class: "btn small",
+      "aria-haspopup": "true",
+      "aria-expanded": "false",
+      onclick: (event) => {
+        event.stopPropagation();
+        panel.hidden = !panel.hidden;
+        button.setAttribute("aria-expanded", String(!panel.hidden));
+      },
+    },
+    icon("columns", 14),
+    "Columns",
+  );
+
+  /* Bound to the document rather than the panel: a menu that only closes via
+     its own button is a menu left open behind whatever you clicked next. */
+  const dismiss = (event) => {
+    if (panel.hidden || anchor.contains(event.target)) return;
+    panel.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  addEventListener("click", dismiss);
+  addEventListener("keydown", (event) => {
+    if (event.key === "Escape") dismiss(event);
+  });
+
+  const anchor = h("div", { class: "menu-anchor" }, button, panel);
+  return anchor;
+}
+
 /** Segmented control for the small, mutually exclusive filters. */
 export function segmented({ options, value, onChange }) {
   return h(

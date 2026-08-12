@@ -237,7 +237,9 @@ function editor({ ctx, kinds, webhook }) {
   /* Prefixes rather than exact kinds: "cloud_save." keeps matching when a new
      cloud-save event is added later. */
   const selected = new Set(webhook?.kinds ?? []);
-  const kindBoxes = (kinds.length ? kinds : ["cloud_save.", "backup.", "admin.", "auth.", "system."]).map(
+  const kindBoxes = (
+    kinds.length ? kinds : ["cloud_save.", "backup.", "user.", "admin.", "auth.", "system."]
+  ).map(
     (kind) => {
       const input = h("input", { type: "checkbox", checked: selected.has(kind) });
       return { kind, input, node: h("label", { class: "checkline" }, input, h("span", { text: kind })) };

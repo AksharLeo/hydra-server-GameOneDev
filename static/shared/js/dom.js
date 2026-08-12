@@ -123,6 +123,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   play: '<path d="M6 4l14 8-14 8z"/>',
   filter: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>',
+  columns: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',
 };
 
 /** Two-letter fallback avatar for a user with no profile image. */

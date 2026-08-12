@@ -53,6 +53,18 @@ impl FromRequestParts<AppState> for CurrentUser {
             return Err(ApiError::forbidden("user not allowed on this server"));
         }
 
+        /* Before the bump below overwrites the evidence: last_seen_at is how
+           the presence log tells a returning client from a busy one. */
+        let ip = crate::client_ip::of(
+            &state.config,
+            &parts.headers,
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0),
+        );
+        crate::presence::touch(state, &user, Some(ip)).await;
+
         /* Bump last_seen_at on every authenticated request. resolve_user only
            touches the row on token-cache misses, which would leave last_seen_at
            up to TOKEN_CACHE_TTL_SECONDS stale while the client is active. */
@@ -163,14 +175,22 @@ pub async fn verify_token(
 pub async fn upsert_user(state: &AppState, user: &AuthenticatedUser) -> Result<(), ApiError> {
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    /* Deliberately does NOT move last_seen_at on an existing row: the presence
+       log reads that column to tell a returning client from a busy one, and a
+       write hidden in here would have overwritten the answer before it was
+       asked. Every caller bumps it explicitly instead.
+
+       created_at is only written by the insert, so getting it back and finding
+       our own timestamp means this row is new — which is how a first sighting
+       gets logged without a second query to ask. */
+    let created_at: Option<(String,)> = sqlx::query_as(
         "INSERT INTO users (id, username, display_name, profile_image_url, created_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            username = excluded.username,
            display_name = excluded.display_name,
-           profile_image_url = excluded.profile_image_url,
-           last_seen_at = excluded.last_seen_at",
+           profile_image_url = excluded.profile_image_url
+         RETURNING created_at",
     )
     .bind(&user.id)
     .bind(&user.username)
@@ -178,8 +198,25 @@ pub async fn upsert_user(state: &AppState, user: &AuthenticatedUser) -> Result<(
     .bind(&user.profile_image_url)
     .bind(&now)
     .bind(&now)
-    .execute(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
+
+    if created_at.is_some_and(|(at,)| at == now) {
+        crate::events::record(
+            state,
+            crate::events::Event::auth(
+                "user.first_seen",
+                format!("{} used this server for the first time", user.display_name),
+            )
+            .actor(format!("user:{}", user.id))
+            .about(&user.id)
+            .detail(serde_json::json!({
+                "username": user.username,
+                "displayName": user.display_name,
+            })),
+        )
+        .await;
+    }
 
     Ok(())
 }

@@ -18,7 +18,13 @@ import {
   pill,
   emptyState,
 } from "/assets/shared/js/components/ui.js";
-import { dataTable, toolbar, segmented } from "/assets/shared/js/components/table.js";
+import {
+  dataTable,
+  toolbar,
+  segmented,
+  columnMenu,
+  chooseColumns,
+} from "/assets/shared/js/components/table.js";
 
 const CATEGORY_ICONS = {
   sync: "saves",
@@ -28,6 +34,102 @@ const CATEGORY_ICONS = {
 };
 
 const SEVERITY_TONE = { critical: "critical", warning: "warning", info: "" };
+
+/**
+ * Every column this screen knows how to draw, in table order.
+ *
+ * `fixed` columns are the ones that make a row identifiable at all; the rest
+ * are the operator's call, and `default: false` keeps the table readable out
+ * of the box while leaving the specialised ones a checkbox away.
+ */
+const COLUMNS = [
+  {
+    key: "at",
+    label: "When",
+    fixed: true,
+    sortable: true,
+    render: (row) =>
+      h(
+        "div",
+        { class: "stack" },
+        h("span", { text: fmt.relative(row.at) }),
+        h("span", { class: "muted small", text: fmt.dateTime(row.at) }),
+      ),
+  },
+  {
+    key: "kind",
+    label: "Event",
+    fixed: true,
+    render: (row) =>
+      h(
+        "div",
+        { class: "row", style: { gap: "8px" } },
+        icon(CATEGORY_ICONS[row.category] ?? "dot", 14),
+        h(
+          "div",
+          { class: "stack", style: { minWidth: 0 } },
+          h("span", { class: "truncate", text: row.summary }),
+          h("span", { class: "mono muted small", text: row.kind }),
+        ),
+      ),
+  },
+  {
+    key: "user",
+    label: "User",
+    render: (row) =>
+      row.user?.id ? userCell(row.user) : h("span", { class: "muted", text: row.actor ?? "—" }),
+  },
+  {
+    key: "actor",
+    label: "Actor",
+    default: false,
+    /* Who did it, as opposed to who it was about — the same for a sync, very
+       much not for an operator deleting someone else's save. */
+    render: (row) => h("span", { class: "mono small", text: row.actor ?? "—" }),
+  },
+  {
+    key: "game",
+    label: "Game",
+    render: (row) =>
+      row.game?.objectId ? gameCell(row.game) : h("span", { class: "muted", text: "—" }),
+  },
+  {
+    key: "ip",
+    label: "IP address",
+    render: (row) =>
+      row.ip
+        ? h("span", { class: "mono small", text: row.ip })
+        : h("span", { class: "muted", text: "—" }),
+  },
+  {
+    key: "category",
+    label: "Category",
+    default: false,
+    render: (row) => pill(row.category),
+  },
+  {
+    key: "size",
+    label: "Size",
+    align: "right",
+    render: (row) => (row.sizeBytes ? fmt.bytes(row.sizeBytes) : ""),
+  },
+  {
+    key: "other",
+    label: "Other",
+    default: false,
+    /* Everything an event kept that no column is shaped for: file counts,
+       failure reasons, how many rows a restore moved. Different keys per
+       kind, which is exactly why they share one column. */
+    render: (row) => otherCell(row.detail),
+  },
+  {
+    key: "severity",
+    label: "",
+    title: "Severity",
+    render: (row) =>
+      row.severity === "info" ? null : pill(row.severity, SEVERITY_TONE[row.severity]),
+  },
+];
 
 export default {
   title: "History",
@@ -135,64 +237,10 @@ export default {
                   }),
               })
             : null,
+          columnMenu({ id: "events", columns: COLUMNS, onChange: () => ctx.refresh() }),
         ),
         dataTable({
-          columns: [
-            {
-              key: "at",
-              label: "When",
-              sortable: true,
-              render: (row) =>
-                h(
-                  "div",
-                  { class: "stack" },
-                  h("span", { text: fmt.relative(row.at) }),
-                  h("span", { class: "muted small", text: fmt.dateTime(row.at) }),
-                ),
-            },
-            {
-              key: "kind",
-              label: "Event",
-              render: (row) =>
-                h(
-                  "div",
-                  { class: "row", style: { gap: "8px" } },
-                  icon(CATEGORY_ICONS[row.category] ?? "dot", 14),
-                  h(
-                    "div",
-                    { class: "stack", style: { minWidth: 0 } },
-                    h("span", { class: "truncate", text: row.summary }),
-                    h("span", { class: "mono muted small", text: row.kind }),
-                  ),
-                ),
-            },
-            {
-              key: "user",
-              label: "User",
-              render: (row) =>
-                row.user?.id
-                  ? userCell(row.user)
-                  : h("span", { class: "muted", text: row.actor ?? "—" }),
-            },
-            {
-              key: "game",
-              label: "Game",
-              render: (row) =>
-                row.game?.objectId ? gameCell(row.game) : h("span", { class: "muted", text: "—" }),
-            },
-            {
-              key: "size",
-              label: "Size",
-              align: "right",
-              render: (row) => (row.sizeBytes ? fmt.bytes(row.sizeBytes) : ""),
-            },
-            {
-              key: "severity",
-              label: "",
-              render: (row) =>
-                row.severity === "info" ? null : pill(row.severity, SEVERITY_TONE[row.severity]),
-            },
-          ],
+          columns: chooseColumns("events", COLUMNS),
           rows: data.rows,
           sort: "at",
           dir: query.dir ?? "desc",
@@ -212,6 +260,49 @@ export default {
     });
   },
 };
+
+/**
+ * The detail blob, flattened into one cell.
+ *
+ * A few pairs only — this is a glance, and the full JSON is one click away in
+ * the expanded row. Rendering it inline is what makes a column of it useful:
+ * "which of these failed, and why" without opening twenty rows.
+ */
+function otherCell(detail, limit = 4) {
+  if (!detail || typeof detail !== "object") return h("span", { class: "muted", text: "—" });
+
+  const entries = Object.entries(detail).filter(([, value]) => value !== null && value !== "");
+  if (!entries.length) return h("span", { class: "muted", text: "—" });
+
+  return h(
+    "div",
+    { class: "row wrap", style: { gap: "4px 8px" } },
+    ...entries.slice(0, limit).map(([key, value]) =>
+      h(
+        "span",
+        { class: "small", style: { whiteSpace: "nowrap" } },
+        h("span", { class: "muted", text: `${fmt.label(key)} ` }),
+        h("span", { class: "mono", text: brief(value) }),
+      ),
+    ),
+    entries.length > limit
+      ? h("span", { class: "muted small", text: `+${entries.length - limit}` })
+      : null,
+  );
+}
+
+function brief(value) {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return fmt.number(value);
+  if (Array.isArray(value)) return `${value.length} item(s)`;
+  if (typeof value === "object") return "{…}";
+
+  const text = String(value);
+  /* A timestamp is the one string worth re-rendering: nothing is read off the
+     nanoseconds of an ISO date at a glance. */
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return fmt.relative(text);
+  return text.length > 28 ? `${text.slice(0, 27)}…` : text;
+}
 
 function details(row) {
   const facts = [

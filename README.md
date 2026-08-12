@@ -80,6 +80,7 @@ subscription needed.
 | `HYDRA_BACKUP_INTERVAL_HOURS` | `24` | Hours between automatic database backups (`0` disables them) |
 | `HYDRA_BACKUP_KEEP` | `7` | Automatic backups kept before the oldest is pruned |
 | `HYDRA_EVENT_RETENTION_DAYS` | `90` | Days of history kept in the event log |
+| `HYDRA_PRESENCE_IDLE_MINUTES` | `15` | Quiet minutes after which a launcher counts as away, so its next call is logged as coming online (`0` switches these events off) |
 
 `HYDRA_MAX_BYTES_PER_USER`, `HYDRA_BACKUPS_PER_GAME_LIMIT` and
 `HYDRA_ALLOWED_USERS` can also be edited live from the admin panel; values saved
@@ -98,10 +99,19 @@ finished, saves whose bytes are missing, users sitting at their quota.
 
 **History** — the full event log, searchable and filterable by category
 (sync / admin / auth / system), severity, kind, user and date range. It records
-what the launchers did, every operator action, every sign-in and lockout, and
-every background job — including things whose rows are long gone, because a
-deleted save that leaves no trace is exactly the one you end up asking about.
-Rows expand to the event's own detail.
+what the launchers did, every operator action, every sign-in and lockout, who
+came online and when, and every background job — including things whose rows
+are long gone, because a deleted save that leaves no trace is exactly the one
+you end up asking about. Rows expand to the event's own detail.
+
+**Columns** on that screen are yours to choose: the *Columns* button lists
+every one the screen can draw — user, actor, game, IP address, category, size,
+severity — and remembers what you picked in that browser. *When* and *Event*
+stay, since something has to identify a row. **Other** is the catch-all: each
+event kind keeps its own facts (how many files a sync moved, why an upload was
+refused, how long someone had been away) and there is no column shape that fits
+all of them, so that column renders whatever this row happened to record. The
+full blob is still one click away in the expanded row.
 
 **Users** — searchable, sortable directory with storage against quota. Each
 account opens onto its own screen: what it stores broken down by kind, the
@@ -177,6 +187,21 @@ counts, pending uploads, blob count, playtime, failing webhooks, events per
 category in the last hour, database size, free disk, request and byte counters.
 Nothing personal — counts and totals only. Set `HYDRA_METRICS_TOKEN` to require
 a bearer token, or `HYDRA_METRICS_ENABLED=false` to remove the endpoint.
+
+### Presence
+
+The launcher never signs out — it just stops calling — so "online" here means
+*calling at all*, and coming online is the first call after a gap of
+`HYDRA_PRESENCE_IDLE_MINUTES`. That produces two event kinds:
+
+- `user.first_seen` — the account's first ever request to this server.
+- `user.online` — a client that had gone quiet is back, with how long it was
+  away and the address it came from.
+
+Nothing is written while a client keeps calling: the check is a read against an
+in-memory table, and the durable `last_seen_at` column is what stops a restart
+announcing everyone who was already here as newly arrived. Set the variable to
+`0` if you would rather not have these events at all.
 
 ### Backups
 

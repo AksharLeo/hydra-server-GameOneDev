@@ -86,6 +86,19 @@ export function quota(value) {
   return Number(value) > 0 ? bytes(value) : "unlimited";
 }
 
+/**
+ * A JSON key as a human label: "safetyBackup" -> "Safety backup".
+ *
+ * Sentence case, not title case — but only where a capital follows a lowercase
+ * letter, so an acronym someone wrote deliberately ("clientIP") survives.
+ */
+export function label(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, (_, before, capital) => `${before} ${capital.toLowerCase()}`)
+    .replace(/^./, (char) => char.toUpperCase())
+    .trim();
+}
+
 /** Enough of a SHA-256 to recognise, not so much it wraps. */
 export function shortHash(hash = "") {
   return hash.slice(0, 10);

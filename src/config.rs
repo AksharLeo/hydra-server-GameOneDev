@@ -50,6 +50,9 @@ pub struct Config {
     pub backup_keep: usize,
     /// Days of event history to keep. Older rows are pruned daily.
     pub event_retention_days: i64,
+    /// Quiet minutes after which a launcher counts as away, so its next call
+    /// is logged as coming online. 0 switches the presence log off.
+    pub presence_idle_minutes: i64,
     /// Set to `false` to switch off the user-facing portal at `/portal`.
     pub portal_enabled: bool,
     /// Path on the official API that exchanges credentials for tokens. The
@@ -127,6 +130,7 @@ impl Config {
             backup_interval_hours: env_parse("HYDRA_BACKUP_INTERVAL_HOURS", 24),
             backup_keep: env_parse("HYDRA_BACKUP_KEEP", 7),
             event_retention_days: env_parse("HYDRA_EVENT_RETENTION_DAYS", 90),
+            presence_idle_minutes: env_parse("HYDRA_PRESENCE_IDLE_MINUTES", 15),
             portal_enabled: env_flag("HYDRA_PORTAL_ENABLED", true),
             official_login_path: env("HYDRA_OFFICIAL_LOGIN_PATH", "/auth/login"),
             data_dir,
@@ -157,6 +161,7 @@ impl Config {
             backup_interval_hours: 24,
             backup_keep: 7,
             event_retention_days: 90,
+            presence_idle_minutes: 15,
             portal_enabled: true,
             official_login_path: "/auth/login".to_string(),
         }

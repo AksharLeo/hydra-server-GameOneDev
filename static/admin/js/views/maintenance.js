@@ -304,7 +304,7 @@ function result(payload) {
       h(
         "div",
         { class: "row" },
-        h("span", { class: "muted small", text: label(key) }),
+        h("span", { class: "muted small", text: fmt.label(key) }),
         h("span", { class: "spacer", style: { flex: 1 } }),
         h("span", {
           class: "small num",
@@ -330,13 +330,6 @@ function formatValue(value) {
   if (Array.isArray(value)) return value.length ? `${value.length}` : "none";
   if (typeof value === "number") return fmt.number(value);
   return String(value);
-}
-
-function label(key) {
-  return key
-    .replace(/([A-Z])/g, " $1")
-    .replace(/^./, (char) => char.toUpperCase())
-    .trim();
 }
 
 function exportCard() {

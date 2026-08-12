@@ -461,6 +461,45 @@ a:hover { text-decoration: underline; }
 }
 .segmented button[aria-pressed="true"] { background: var(--surface-1); color: var(--text); box-shadow: var(--shadow); }
 
+/* ------------------------------------------------------------------ menus */
+/* Small panel anchored under its button — the column chooser, for now.
+   Right-aligned because these buttons live at the right end of a toolbar. */
+
+.menu-anchor { position: relative; display: inline-flex; }
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 200px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
+.menu[hidden] { display: none; }
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.menu-item:hover { background: var(--surface-2); }
+.menu-item input { accent-color: var(--accent); width: 14px; height: 14px; }
+.menu-item input:disabled { opacity: 0.5; }
+.menu-item .muted { margin-left: auto; }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
 /* ----------------------------------------------------------------- tables */
 
 .table-wrap { overflow-x: auto; }

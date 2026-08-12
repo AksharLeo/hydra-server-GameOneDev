@@ -184,10 +184,14 @@ async fn login(
 
     crate::auth::upsert_user(&state, &user).await?;
 
-    let blocked: Option<(i64,)> = sqlx::query_as("SELECT is_blocked FROM users WHERE id = ?")
-        .bind(&user.id)
-        .fetch_optional(&state.pool)
-        .await?;
+    /* Signing in to the portal is being seen, and upsert_user deliberately
+       leaves that column to whoever knows it happened. */
+    let blocked: Option<(i64,)> =
+        sqlx::query_as("UPDATE users SET last_seen_at = ? WHERE id = ? RETURNING is_blocked")
+            .bind(Utc::now().to_rfc3339())
+            .bind(&user.id)
+            .fetch_optional(&state.pool)
+            .await?;
     if matches!(blocked, Some((1,))) {
         return Err(ApiError::forbidden("this account is blocked on this server"));
     }
