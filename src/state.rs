@@ -67,4 +67,12 @@ pub struct AppState {
     pub settings: Arc<RwLock<RuntimeSettings>>,
     /// Process start, for the admin panel's uptime display.
     pub started_at: DateTime<Utc>,
+    /// Counters behind `/metrics`.
+    pub metrics: Arc<crate::metrics::Counters>,
+    /// Failed sign-ins per address, for the login lockout.
+    pub login_guard: Arc<RwLock<crate::ratelimit::Guard>>,
+    /// Last time each user was seen calling, for the presence log. Memory
+    /// only: the database keeps the durable answer, this keeps the hot path
+    /// off it.
+    pub presence: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
 }

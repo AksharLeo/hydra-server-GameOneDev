@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
+<title>Hydra Server — Admin</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%237c6bff'/><path d='M9 22V10h3v4.6h8V10h3v12h-3v-4.6h-8V22z' fill='white'/></svg>" />
+<link rel="stylesheet" href="/assets/shared/app.css" />
+<script>
+  /* Theme before first paint: a flash of the wrong theme on every load is
+     the one bug a dashboard shows its operator every single day. */
+  try {
+    const saved = localStorage.getItem("hydra-admin-theme");
+    const theme = saved
+      || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.theme = theme;
+  } catch (_) {}
+</script>
+</head>
+<body>
+<div id="app" aria-busy="true"></div>
+<script type="module" src="/assets/admin/js/main.js"></script>
+<noscript>The admin panel needs JavaScript enabled.</noscript>
+</body>
+</html>
