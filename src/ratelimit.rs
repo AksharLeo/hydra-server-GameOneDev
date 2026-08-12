@@ -8,10 +8,9 @@
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 
 /// Failures older than this stop counting, so an occasional typo never
 /// accumulates into a lockout.
@@ -30,36 +29,6 @@ pub type Guard = HashMap<String, Attempts>;
 
 fn key(scope: &str, ip: &str) -> String {
     format!("{scope}:{ip}")
-}
-
-/// The caller's address, honouring proxy headers only when configured to.
-///
-/// `X-Forwarded-For` is trivially spoofable by anyone talking to the server
-/// directly, and trusting it unconditionally would let an attacker mint a
-/// fresh identity per guess — the exact thing this module exists to stop.
-pub fn client_ip(state: &AppState, headers: &HeaderMap, socket: Option<SocketAddr>) -> String {
-    if state.config.trust_proxy_headers {
-        let forwarded = headers
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(',').next())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        let real_ip = headers
-            .get("x-real-ip")
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        if let Some(ip) = forwarded.or(real_ip) {
-            return ip.to_string();
-        }
-    }
-
-    socket
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Refuses the attempt when the address is locked out.

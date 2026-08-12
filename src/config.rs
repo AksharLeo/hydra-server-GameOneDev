@@ -29,10 +29,17 @@ pub struct Config {
     pub login_max_attempts: u32,
     /// How long a locked-out address stays locked.
     pub login_lockout_minutes: i64,
-    /// Trust `X-Forwarded-For` / `X-Real-IP` for the client address. Only
-    /// enable behind a proxy you control — otherwise a client can spoof its
-    /// own address and walk straight past the login lockout.
+    /// Trust proxy headers for the client address. Only enable behind a proxy
+    /// you control — otherwise a client can spoof its own address and walk
+    /// straight past the login lockout.
     pub trust_proxy_headers: bool,
+    /// Header carrying the client address, when the default order (Cloudflare,
+    /// then `X-Forwarded-For`, then `X-Real-IP`) isn't what your proxy sets.
+    /// Empty = use the default order.
+    pub client_ip_header: String,
+    /// How many proxies append to `X-Forwarded-For` after the entry we want.
+    /// 0 for a single reverse proxy; 1 with Cloudflare in front of it.
+    pub trusted_proxy_hops: usize,
     /// Bearer token guarding `/metrics`. Empty = the endpoint is open.
     pub metrics_token: String,
     /// Set to `false` to switch off `/metrics` entirely.
@@ -111,6 +118,10 @@ impl Config {
             login_max_attempts: env_parse("HYDRA_LOGIN_MAX_ATTEMPTS", 8),
             login_lockout_minutes: env_parse("HYDRA_LOGIN_LOCKOUT_MINUTES", 15),
             trust_proxy_headers: env_flag("HYDRA_TRUST_PROXY_HEADERS", false),
+            client_ip_header: env("HYDRA_CLIENT_IP_HEADER", "")
+                .trim()
+                .to_ascii_lowercase(),
+            trusted_proxy_hops: env_parse("HYDRA_TRUSTED_PROXY_HOPS", 0),
             metrics_token: env("HYDRA_METRICS_TOKEN", ""),
             metrics_enabled: env_flag("HYDRA_METRICS_ENABLED", true),
             backup_interval_hours: env_parse("HYDRA_BACKUP_INTERVAL_HOURS", 24),
@@ -119,6 +130,35 @@ impl Config {
             portal_enabled: env_flag("HYDRA_PORTAL_ENABLED", true),
             official_login_path: env("HYDRA_OFFICIAL_LOGIN_PATH", "/auth/login"),
             data_dir,
+        }
+    }
+
+    /// Defaults without reading the environment, so a unit test can set the
+    /// one field it is about without a process-wide `set_var`.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self {
+            bind: "127.0.0.1:8788".to_string(),
+            public_url: "http://127.0.0.1:8788".to_string(),
+            data_dir: PathBuf::from("./data"),
+            official_api_url: String::new(),
+            secret: "test-secret".to_string(),
+            admin_password: String::new(),
+            max_bytes_per_user: 0,
+            backups_per_game_limit: 100,
+            allowed_users: Vec::new(),
+            login_max_attempts: 8,
+            login_lockout_minutes: 15,
+            trust_proxy_headers: false,
+            client_ip_header: String::new(),
+            trusted_proxy_hops: 0,
+            metrics_token: String::new(),
+            metrics_enabled: true,
+            backup_interval_hours: 24,
+            backup_keep: 7,
+            event_retention_days: 90,
+            portal_enabled: true,
+            official_login_path: "/auth/login".to_string(),
         }
     }
 

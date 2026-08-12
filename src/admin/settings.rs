@@ -6,15 +6,18 @@
 //! an unanswerable question.
 
 use super::AdminSession;
+use crate::client_ip;
 use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::settings as store;
 use crate::state::{AppState, RuntimeSettings};
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 
 pub fn router() -> Router<AppState> {
     Router::new().route(
@@ -23,7 +26,37 @@ pub fn router() -> Router<AppState> {
     )
 }
 
-async fn payload(state: &AppState) -> ApiResult<Json<Value>> {
+/// What this server makes of the request it is answering right now.
+///
+/// "Every sign-in is logged from the same address" is a proxy question, and
+/// the only way to answer it is to compare what arrived with what was
+/// believed — so the screen shows both, for the request that drew it.
+fn proxy_report(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> Value {
+    let resolved = client_ip::resolve(&state.config, headers, Some(peer));
+    let observed = client_ip::observed_headers(headers);
+
+    json!({
+        "clientIp": resolved.ip,
+        "source": resolved.source,
+        "peer": peer.ip().to_string(),
+        "trustProxyHeaders": state.config.trust_proxy_headers,
+        "header": state.config.client_ip_header,
+        "hops": state.config.trusted_proxy_hops,
+        "observed": observed.iter().map(|(name, value)| json!({
+            "name": name,
+            "value": value,
+        })).collect::<Vec<_>>(),
+        /* The one combination that silently produces wrong addresses: a proxy
+           is plainly in front, and the server was never told to believe it. */
+        "ignoringHeaders": !state.config.trust_proxy_headers && !observed.is_empty(),
+    })
+}
+
+async fn payload(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) -> ApiResult<Json<Value>> {
     let current = state.settings.read().await.clone();
     let defaults = RuntimeSettings::from_config(&state.config);
 
@@ -54,11 +87,17 @@ async fn payload(state: &AppState) -> ApiResult<Json<Value>> {
             "dataDir": state.config.data_dir.display().to_string(),
             "bind": state.config.bind,
         },
+        "proxy": proxy_report(state, headers, peer),
     })))
 }
 
-async fn get_settings(State(state): State<AppState>, _admin: AdminSession) -> ApiResult<Json<Value>> {
-    payload(&state).await
+async fn get_settings(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    payload(&state, &headers, peer).await
 }
 
 #[derive(Deserialize)]
@@ -74,6 +113,8 @@ struct UpdateRequest {
 async fn update_settings(
     State(state): State<AppState>,
     _admin: AdminSession,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<UpdateRequest>,
 ) -> ApiResult<Json<Value>> {
     if let Some(max_bytes) = request.max_bytes_per_user {
@@ -111,13 +152,15 @@ async fn update_settings(
     )
     .await;
 
-    payload(&state).await
+    payload(&state, &headers, peer).await
 }
 
 /// DELETE /admin/api/settings — clears every override, back to env values.
 async fn reset_settings(
     State(state): State<AppState>,
     _admin: AdminSession,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     store::clear(&state.pool).await?;
     reload(&state).await;
@@ -128,7 +171,7 @@ async fn reset_settings(
     )
     .await;
 
-    payload(&state).await
+    payload(&state, &headers, peer).await
 }
 
 async fn reload(state: &AppState) {

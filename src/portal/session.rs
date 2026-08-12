@@ -145,7 +145,7 @@ async fn login(
         return Err(ApiError::forbidden("the portal is disabled on this server"));
     }
 
-    let ip = ratelimit::client_ip(&state, &headers, Some(peer));
+    let ip = crate::client_ip::of(&state.config, &headers, Some(peer));
     ratelimit::check(&state, SCOPE, &ip).await?;
 
     let token = match (&request.access_token, &request.email, &request.password) {

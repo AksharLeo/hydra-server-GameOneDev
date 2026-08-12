@@ -70,7 +70,9 @@ subscription needed.
 | `HYDRA_ALLOWED_USERS` | *(empty = everyone)* | Comma-separated official user ids or usernames allowed to use this server |
 | `HYDRA_LOGIN_MAX_ATTEMPTS` | `8` | Failed sign-ins from one address before it is locked out |
 | `HYDRA_LOGIN_LOCKOUT_MINUTES` | `15` | How long a locked-out address stays locked |
-| `HYDRA_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` / `X-Real-IP` for the client address. **Only enable behind a proxy you control** — otherwise a client can spoof its address and walk past the lockout |
+| `HYDRA_TRUST_PROXY_HEADERS` | `false` | Take the client address from forwarding headers. **Only enable behind a proxy you control** — otherwise a client can spoof its address and walk past the lockout |
+| `HYDRA_TRUSTED_PROXY_HOPS` | `0` | Proxies that append to `X-Forwarded-For` after the entry you want: `0` for one reverse proxy, `1` with Cloudflare in front of it |
+| `HYDRA_CLIENT_IP_HEADER` | *(empty = auto)* | Read the client address from this header only, when the default order isn't what your proxy sets |
 | `HYDRA_PORTAL_ENABLED` | `true` | Serve the user portal at `/portal` |
 | `HYDRA_OFFICIAL_LOGIN_PATH` | `/auth/login` | Path on the official API the portal posts its sign-in form to |
 | `HYDRA_METRICS_ENABLED` | `true` | Serve Prometheus metrics at `/metrics` |
@@ -215,9 +217,40 @@ are recorded in the event log, the restore at critical severity.
 
 Both password forms — the admin panel and the portal — lock an address out
 after `HYDRA_LOGIN_MAX_ATTEMPTS` failures within fifteen minutes, and every
-failure and lockout is recorded in the event log. Behind a reverse proxy, set
-`HYDRA_TRUST_PROXY_HEADERS=true` so the lockout keys on the real client address
-rather than the proxy's.
+failure and lockout is recorded in the event log.
+
+### Client addresses behind a proxy
+
+The address is the key for all of that, so getting it wrong is not cosmetic:
+every sign-in is logged from the proxy, and one visitor's fumbled password
+locks out everyone behind it. Set `HYDRA_TRUST_PROXY_HEADERS=true` when a proxy
+is the only way in — until then the connecting socket is the only thing
+believed, because a forwarding header is forgeable by anything that can reach
+the server directly.
+
+With that on, the address is taken from the first of these that carries one:
+
+1. `CF-Connecting-IP`, then `True-Client-IP` — Cloudflare overwrites these on
+   every request, so they hold even when a reverse proxy behind Cloudflare
+   fills `X-Real-IP` in with Cloudflare's edge address.
+2. `X-Forwarded-For`, counted **from the right** and skipping
+   `HYDRA_TRUSTED_PROXY_HOPS` entries. Each proxy appends the address it saw,
+   so the right-hand end was written by machines you run while the left-hand
+   end is whatever the visitor claimed — Cloudflare appends to a header the
+   visitor sent rather than replacing it, which is why "take the first entry"
+   is forgeable. Leave the hop count at `0` for a single reverse proxy.
+3. `X-Real-IP`.
+
+If your proxy puts it somewhere else, name that header in
+`HYDRA_CLIENT_IP_HEADER` and nothing else is consulted. Entries that aren't
+addresses are discarded rather than passed through, since these strings become
+rate-limit keys and log lines.
+
+**To check it worked:** *Settings → Client addresses* shows what the server
+made of the request that drew the screen — the address it settled on, the
+header it came from, the socket it actually arrived on, and every forwarding
+header that turned up. It also says so plainly when a proxy is clearly in front
+and its headers are being ignored.
 
 #### Extending the panel
 

@@ -5,6 +5,7 @@ mod artwork;
 mod assets;
 mod auth;
 mod backup;
+mod client_ip;
 mod cloud_saves;
 mod config;
 mod emulation;

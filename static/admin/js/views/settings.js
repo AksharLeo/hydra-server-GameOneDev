@@ -1,6 +1,6 @@
 /** Runtime settings: environment default, saved override, value in force. */
 
-import { h } from "/assets/shared/js/dom.js";
+import { h, icon } from "/assets/shared/js/dom.js";
 import * as fmt from "/assets/shared/js/format.js";
 import { api } from "/assets/shared/js/api.js";
 import { card, pill, confirm, toast } from "/assets/shared/js/components/ui.js";
@@ -144,10 +144,95 @@ export default {
             ),
           ),
         }),
+        proxyCard(data.proxy),
       ),
     );
   },
 };
+
+/**
+ * What the server made of this very request.
+ *
+ * Behind a proxy every address it records is a header's word, and the failure
+ * is silent: sign-ins get logged from the proxy and one visitor's fumbled
+ * password locks out everyone. This is the screen that says which address
+ * won and why.
+ */
+function proxyCard(proxy) {
+  if (!proxy) return null;
+
+  const rows = [
+    ["Your address", h("span", { class: "mono small", text: proxy.clientIp })],
+    ["Taken from", h("span", { class: "mono small", text: proxy.source })],
+    ["Connection from", h("span", { class: "mono small", text: proxy.peer })],
+    [
+      "Proxy headers",
+      proxy.trustProxyHeaders ? pill("trusted", "good") : pill("ignored", "warning"),
+    ],
+  ];
+
+  if (proxy.trustProxyHeaders && proxy.header) {
+    rows.push(["Configured header", h("span", { class: "mono small", text: proxy.header })]);
+  }
+  if (proxy.trustProxyHeaders && !proxy.header) {
+    rows.push([
+      "Forwarded-for hops",
+      h("span", { class: "mono small", text: String(proxy.hops) }),
+    ]);
+  }
+
+  return card({
+    title: "Client addresses",
+    subtitle: "as seen on this request",
+    body: h(
+      "div",
+      { class: "card-body", style: { display: "grid", gap: "14px" } },
+      proxy.ignoringHeaders
+        ? h(
+            "div",
+            { class: "alert warning" },
+            icon("warning", 18),
+            h(
+              "div",
+              { class: "stack", style: { flex: 1 } },
+              h("div", { class: "title", text: "A proxy is forwarding to this server, but its headers are ignored" }),
+              h("div", {
+                class: "detail",
+                text: "Every sign-in is being recorded from the proxy's address, and one visitor's failed attempts lock out everyone behind it. Set HYDRA_TRUST_PROXY_HEADERS=true — but only once the proxy is the sole way in, since the headers are forgeable by anything that can reach this server directly.",
+              }),
+            ),
+          )
+        : null,
+      h(
+        "dl",
+        { class: "kv" },
+        ...rows.flatMap(([label, value]) => [h("dt", { text: label }), h("dd", {}, value)]),
+      ),
+      proxy.observed.length
+        ? h(
+            "div",
+            { class: "stack", style: { gap: "6px" } },
+            h("span", { class: "muted small", text: "Headers on this request" }),
+            ...proxy.observed.map((header) =>
+              h(
+                "div",
+                { class: "row", style: { gap: "10px", alignItems: "baseline" } },
+                h("span", {
+                  class: "mono small",
+                  style: { color: header.name === proxy.source ? "var(--accent)" : null },
+                  text: header.name,
+                }),
+                h("span", { class: "mono small muted truncate", text: header.value }),
+              ),
+            ),
+          )
+        : h("span", {
+            class: "muted small",
+            text: "No forwarding headers arrived — this request reached the server directly.",
+          }),
+    ),
+  });
+}
 
 function field(label, input, hint) {
   return h(
