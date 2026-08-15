@@ -9,7 +9,6 @@ on:
 env:
   REGISTRY: ghcr.io
 
-# One publish at a time, so two runs can never race for the `latest` tag.
 concurrency:
   group: docker-publish
   cancel-in-progress: false
@@ -26,8 +25,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # A tag is the thing users pin, so it must not be able to disagree with
-      # the version the binary reports.
       - name: Check tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -45,9 +42,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Registers the binfmt handlers the linux/arm64 build and smoke test run
-      # under. Hosted runners have carried these in practice, but leaving it
-      # implicit puts the arm64 image at the mercy of a runner image change.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -58,8 +52,6 @@ jobs:
         id: image
         run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      # `latest` is left to metadata-action's default `latest=auto`: it follows
-      # a semver tag push and is deliberately not moved by a manual dispatch.
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -84,10 +76,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Pulls back what was just pushed and starts it, per architecture. A
-      # cross-compiled binary that cannot boot — a missing shared library in the
-      # runtime stage, say — builds perfectly happily, and arm64 is the variant
-      # least likely to be tried by hand before someone runs it for real.
+      # Pulls back what was just pushed and starts it, per architecture.
       - name: Smoke test the published image
         env:
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
