@@ -50,6 +50,22 @@ Or with Docker:
 docker compose up -d
 ```
 
+#### Using the pre-built image (GHCR)
+By default, the compose file builds the image locally. To use the pre-built image from the GitHub Container Registry instead, edit `docker-compose.yml` and replace `build: .` with the image URL:
+```yaml
+services:
+  hydra-server:
+    image: ghcr.io/gameonedev/hydra-server:latest
+```
+
+#### Local Data Folder (Optional)
+The `docker-compose.yml` file uses a Docker named volume for storage by default. If you prefer the data to be visible in a local `data` folder next to your compose file, change the `volumes` mapping in `docker-compose.yml` to `./data:/data`:
+```yaml
+    volumes:
+      - ./data:/data
+```
+You can also remove the `volumes:` block at the bottom of the compose file if you do this.
+
 Then, in a launcher patched with self-hosted cloud support:
 **Settings → Integrations → Self-hosted cloud storage** → enter your server URL
 and save. Cloud save / achievement sync features unlock immediately; no
