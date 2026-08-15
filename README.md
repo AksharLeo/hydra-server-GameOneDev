@@ -375,6 +375,10 @@ symptom would be a 404 in the middle of a sync. `features` is the contract to
 match on; `version` tracks the launcher release this server targets and is for
 display and support.
 
+## Releasing
+
+Docker images are published to `ghcr.io/gameonedev/hydra-server`
+
 ## Notes
 
 - Put the server behind HTTPS (Caddy, nginx, Traefik) before exposing it to the
