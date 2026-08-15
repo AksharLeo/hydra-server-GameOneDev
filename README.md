@@ -375,6 +375,31 @@ symptom would be a 404 in the middle of a sync. `features` is the contract to
 match on; `version` tracks the launcher release this server targets and is for
 display and support.
 
+## Releasing
+
+Docker images are published to `ghcr.io/gameonedev/hydra-server` by the
+`Build and publish Docker image` workflow. A release is a git tag:
+
+```bash
+# 1. bump the version in Cargo.toml, commit it
+# 2. tag that commit, matching the version with a leading v
+git tag v4.1.2
+git push origin v4.1.2
+```
+
+The tag push builds `linux/amd64` and `linux/arm64`, publishes them, then pulls
+each one back and checks it answers on `/health` with the expected version
+before the run is allowed to pass.
+
+A `v4.1.2` tag publishes `4.1.2`, `4.1`, `4`, and moves `latest`. Users pin
+`4.1.2` for an exact build or `4.1` to follow patches. The tag must match the
+version in `Cargo.toml` — the workflow fails the run if it doesn't, so a
+mislabelled image never reaches the registry.
+
+Running the workflow by hand (Actions → Run workflow) publishes `edge` and a
+`sha-` tag from the default branch. It deliberately does not move `latest`;
+only a release tag does that.
+
 ## Notes
 
 - Put the server behind HTTPS (Caddy, nginx, Traefik) before exposing it to the
