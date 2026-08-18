@@ -282,7 +282,18 @@ pub async fn list_for_user(
     _viewer: CurrentUser,
     Path(user_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(json!({ "artwork": fetch_for_user(&state, &user_id).await? })))
+    let all = fetch_for_user(&state, &user_id).await?;
+
+    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id)
+        .await
+        .unwrap_or_default();
+
+    let visible: Vec<ArtworkEntry> = all
+        .into_iter()
+        .filter(|entry| !hidden.contains(&(entry.shop.clone(), entry.object_id.clone())))
+        .collect();
+
+    Ok(Json(json!({ "artwork": visible })))
 }
 
 async fn fetch_for_user(state: &AppState, user_id: &str) -> ApiResult<Vec<ArtworkEntry>> {
