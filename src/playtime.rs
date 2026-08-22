@@ -163,13 +163,11 @@ pub async fn user_heatmap(
 ) -> ApiResult<Json<Vec<DayPlaytime>>> {
     let mut days = fetch_heatmap(&state, &user_id, query.days).await?;
 
-    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id)
-        .await
-        .unwrap_or_default();
+    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id).await?;
 
     for day in &mut days {
         day.games
-            .retain(|g| !hidden.contains(&(g.shop.clone(), g.object_id.clone())));
+            .retain(|g| !hidden.contains(&g.shop, &g.object_id));
         day.total_seconds = day.games.iter().map(|g| g.seconds).sum();
     }
 

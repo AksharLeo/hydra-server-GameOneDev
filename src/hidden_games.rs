@@ -7,7 +7,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -122,19 +122,33 @@ pub async fn unhide(
     Ok(StatusCode::OK)
 }
 
-/// Returns the set of (shop, object_id) pairs hidden by a user.
+/// The games a user has hidden, grouped by shop so membership can be tested
+/// without allocating per row.
+#[derive(Default)]
+pub struct HiddenSet(HashMap<String, HashSet<String>>);
+
+impl HiddenSet {
+    pub fn contains(&self, shop: &str, object_id: &str) -> bool {
+        self.0.get(shop).is_some_and(|ids| ids.contains(object_id))
+    }
+}
+
+/// Returns the games hidden by a user.
 /// Used by profile-facing endpoints to filter hidden games.
-pub async fn hidden_set(
-    pool: &SqlitePool,
-    user_id: &str,
-) -> Result<HashSet<(String, String)>, sqlx::Error> {
+pub async fn hidden_set(pool: &SqlitePool, user_id: &str) -> Result<HiddenSet, sqlx::Error> {
     let rows = sqlx::query("SELECT shop, object_id FROM hidden_games WHERE user_id = ?")
         .bind(user_id)
         .fetch_all(pool)
         .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| (row.get("shop"), row.get("object_id")))
-        .collect())
+    let mut hidden = HiddenSet::default();
+    for row in &rows {
+        hidden
+            .0
+            .entry(row.get("shop"))
+            .or_default()
+            .insert(row.get("object_id"));
+    }
+
+    Ok(hidden)
 }

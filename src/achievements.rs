@@ -154,8 +154,7 @@ pub async fn user_stats(
 ) -> ApiResult<Json<Value>> {
     let rows = sqlx::query(
         "SELECT shop, object_id, json_array_length(achievements) AS cnt
-         FROM game_achievements
-         WHERE user_id = ? AND shop IS NOT NULL AND object_id IS NOT NULL",
+         FROM game_achievements WHERE user_id = ?",
     )
     .bind(&user_id)
     .fetch_all(&state.pool)
@@ -165,16 +164,20 @@ pub async fn user_stats(
         return Ok(Json(json!({ "unlockedAchievementSum": null })));
     }
 
-    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id)
-        .await
-        .unwrap_or_default();
+    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id).await?;
 
+    // shop and object_id are nullable. A row synced without them cannot be
+    // matched against the hidden list, but its achievements still count.
     let sum: i64 = rows
         .iter()
         .filter(|row| {
-            let shop: String = row.get("shop");
-            let oid: String = row.get("object_id");
-            !hidden.contains(&(shop, oid))
+            let shop: Option<&str> = row.get("shop");
+            let object_id: Option<&str> = row.get("object_id");
+
+            match (shop, object_id) {
+                (Some(shop), Some(object_id)) => !hidden.contains(shop, object_id),
+                _ => true,
+            }
         })
         .map(|row| row.get::<i64, _>("cnt"))
         .sum();
@@ -260,17 +263,11 @@ pub async fn recent(
     .fetch_all(&state.pool)
     .await?;
 
-    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id)
-        .await
-        .unwrap_or_default();
+    let hidden = crate::hidden_games::hidden_set(&state.pool, &user_id).await?;
 
     let mut games: Vec<(i64, Value)> = rows
         .iter()
-        .filter(|row| {
-            let shop: String = row.get("shop");
-            let oid: String = row.get("object_id");
-            !hidden.contains(&(shop, oid))
-        })
+        .filter(|row| !hidden.contains(row.get("shop"), row.get("object_id")))
         .filter_map(|row| {
             let achievements: Vec<Value> =
                 serde_json::from_str(&row.get::<String, _>("achievements")).ok()?;
