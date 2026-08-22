@@ -290,7 +290,7 @@ pub async fn list_for_user(
 
     let visible: Vec<ArtworkEntry> = all
         .into_iter()
-        .filter(|entry| !hidden.contains(&(entry.shop.clone(), entry.object_id.clone())))
+        .filter(|entry| !hidden.contains(&entry.shop, &entry.object_id))
         .collect();
 
     Ok(Json(json!({ "artwork": visible })))

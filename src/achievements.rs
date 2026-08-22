@@ -171,11 +171,7 @@ pub async fn user_stats(
 
     let sum: i64 = rows
         .iter()
-        .filter(|row| {
-            let shop: String = row.get("shop");
-            let oid: String = row.get("object_id");
-            !hidden.contains(&(shop, oid))
-        })
+        .filter(|row| !hidden.contains(row.get("shop"), row.get("object_id")))
         .map(|row| row.get::<i64, _>("cnt"))
         .sum();
 
@@ -266,11 +262,7 @@ pub async fn recent(
 
     let mut games: Vec<(i64, Value)> = rows
         .iter()
-        .filter(|row| {
-            let shop: String = row.get("shop");
-            let oid: String = row.get("object_id");
-            !hidden.contains(&(shop, oid))
-        })
+        .filter(|row| !hidden.contains(row.get("shop"), row.get("object_id")))
         .filter_map(|row| {
             let achievements: Vec<Value> =
                 serde_json::from_str(&row.get::<String, _>("achievements")).ok()?;

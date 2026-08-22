@@ -169,7 +169,7 @@ pub async fn user_heatmap(
 
     for day in &mut days {
         day.games
-            .retain(|g| !hidden.contains(&(g.shop.clone(), g.object_id.clone())));
+            .retain(|g| !hidden.contains(&g.shop, &g.object_id));
         day.total_seconds = day.games.iter().map(|g| g.seconds).sum();
     }
 
